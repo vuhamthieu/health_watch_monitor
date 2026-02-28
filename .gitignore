@@ -1,0 +1,27 @@
+# STM32 / arm-none-eabi build output
+build/
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.d
+*.o
+
+# CubeIDE / Eclipse project files (keep .ioc, discard IDE metadata)
+.cproject
+.project
+.settings/
+.mxproject
+Debug/
+Release/
+
+# VS Code user data
+.vscode/*.log
+
+# Editor swap / temp files
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
