@@ -29,7 +29,8 @@ extern "C" {
 
 /* Button timing (milliseconds) */
 #define BTN_DEBOUNCE_MS         20u     /**< Debounce filter window            */
-#define BTN_LONG_PRESS_MS       2000u   /**< Long-press threshold (BACK btn)  */
+#define BTN_LONG_PRESS_MS       2000u   /**< Long-press: back button menu      */
+#define BTN_POWER_PRESS_MS      5000u   /**< 5 s hold BACK on homescreen = power menu */
 #define BTN_REPEAT_DELAY_MS     500u    /**< Auto-repeat initial delay         */
 #define BTN_REPEAT_INTERVAL_MS  150u    /**< Auto-repeat interval              */
 
@@ -78,8 +79,8 @@ extern UART_HandleTypeDef huart1;
 #define MPU6050_WAKE_COUNT      3u      /**< Consecutive detections required  */
 
 /* Step counter thresholds */
-#define STEP_ACCEL_THRESHOLD    1.2f    /**< g — peak magnitude for a step    */
-#define STEP_MIN_INTERVAL_MS    250u    /**< Min time between steps (240bpm)  */
+#define STEP_ACCEL_THRESHOLD    1.05f   /**< g — lower = more sensitive wrist waving  */
+#define STEP_MIN_INTERVAL_MS    300u    /**< Min time between steps (200 bpm max)     */
 #define STEP_STRIDE_LENGTH_M    0.75f   /**< Default stride length in metres  */
 #define STEP_CALORIE_PER_STEP   0.04f   /**< kcal per step (approximate)      */
 #define STEP_DAILY_GOAL         10000u  /**< Daily step goal                  */
@@ -105,6 +106,39 @@ extern UART_HandleTypeDef huart1;
 
 /* UI */
 #define UI_REFRESH_PERIOD_MS    100u    /**< OLED refresh rate (10 Hz max)    */
+
+/* Battery — VREF-based estimation (no external pin needed)
+ * ADC1 channel 17 = internal VREF (1.20 V typical on STM32F103).
+ * We compare VREF counts to VDD to infer VDD; if VDD is low the battery is low.
+ * LiPo typical: 4.2 V (full) → 3.0 V (empty). Board has 3.3 V LDO, so VDD
+ * stays at 3.3 V until LDO drops out ~3.5 V → VDD starts to sag.
+ * These thresholds are approximate — tune after measuring your specific board. */
+#define BATT_VREF_IDEAL_COUNTS  1550u  /**< VREF counts when VDD = 3.3 V (nom) */
+#define BATT_VREF_LOW_COUNTS    1700u  /**< VREF counts when VDD ≈ 3.1 V (low) */
+#define BATT_VREF_CRIT_COUNTS   1850u  /**< VREF counts when VDD ≈ 2.85 V (crit)*/
+
+/* TP4057 status pins — active LOW, input with pull-up
+ * Connect TP4057 CHRG pin → PA5, STDBY pin → PA6 */
+#define TP4057_CHRG_PORT        GPIOA
+#define TP4057_CHRG_PIN         GPIO_PIN_5   /**< PA5 – LOW = charging         */
+#define TP4057_STDBY_PORT       GPIOA
+#define TP4057_STDBY_PIN        GPIO_PIN_6   /**< PA6 – LOW = charge complete  */
+
+/* Battery bar icon levels */
+#define BATT_BARS_FULL          4u
+#define BATT_BARS_HIGH          3u
+#define BATT_BARS_MED           2u
+#define BATT_BARS_LOW           1u
+#define BATT_BARS_EMPTY         0u
+
+/* Workout / statistics */
+#define STATS_DAYS              7u      /**< Keep 7 days of daily step data   */
+#define STATS_HR_SAMPLES        24u     /**< Keep 24 hourly HR averages       */
+#define WORKOUT_PUSHUP_THRESH   1.8f    /**< g threshold for push-up detect   */
+#define WORKOUT_RUN_STEP_HZ     2.5f    /**< Steps/s threshold: walk→run      */
+
+/* Stopwatch */
+#define STOPWATCH_TIMER_PERIOD_MS  10u  /**< Stopwatch tick resolution (10 ms)*/
 
 /* IWDG */
 #define IWDG_TIMEOUT_MS         2000u   /**< IWDG window — must feed < 2s     */

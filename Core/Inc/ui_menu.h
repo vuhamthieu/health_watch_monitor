@@ -1,21 +1,16 @@
-/**
- * @file    ui_menu.h
- * @brief   UI / menu state machine for the OLED display.
- *          Driven by ButtonEvent_t items consumed from xButtonEventQueue.
+/* ui_menu.h - screen IDs, UI state machine, and API
  *
  * Screen hierarchy:
- *   SCREEN_MAIN
- *     → SCREEN_HEART_RATE  (UP/DOWN from main)
- *     → SCREEN_SPO2
- *     → SCREEN_STEPS
- *     → SCREEN_BT_STATUS
- *     → SCREEN_SETTINGS
- *         → SETTINGS_BRIGHTNESS
- *         → SETTINGS_BT_TOGGLE
- *         → SETTINGS_RESET_STEPS
- *         → SETTINGS_SLEEP_TIMER
- *         → SETTINGS_ABOUT
- *   OVERLAY_SLEEP_OPTIONS  (BACK long-press from any screen)
+ *   SCREEN_HOME
+ *     → SELECT → SCREEN_MENU (scrollable list)
+ *         [0] Heart Rate     → SCREEN_HR_MEASURE
+ *         [1] SpO2           → SCREEN_SPO2_MEASURE
+ *         [2] EEG            → SCREEN_EEG (placeholder)
+ *         [3] Workout        → SCREEN_WORKOUT
+ *         [4] Stopwatch      → SCREEN_STOPWATCH
+ *         [5] Statistics     → SCREEN_STATS
+ *         [6] Settings       → SCREEN_SETTINGS
+ *     BACK (5 s on home)     → SCREEN_POWER_MENU
  */
 
 #ifndef __UI_MENU_H
@@ -34,99 +29,99 @@ extern "C" {
  *  Screen IDs
  * ========================================================================== */
 typedef enum {
-    /* Main screens — cycled with UP/DOWN from main */
-    SCREEN_MAIN         = 0,
-    SCREEN_HEART_RATE,
-    SCREEN_SPO2,
-    SCREEN_STEPS,
-    SCREEN_BT_STATUS,
-    SCREEN_SETTINGS,
+    SCREEN_HOME = 0,        /* retro homescreen                              */
+    SCREEN_MENU,            /* main scrollable menu                          */
+    SCREEN_HR_MEASURE,      /* beating heart + progress ring                 */
+    SCREEN_SPO2_MEASURE,    /* SpO2 measurement                              */
+    SCREEN_EEG,             /* placeholder                                   */
+    SCREEN_WORKOUT,         /* walk / run / push-up mode                     */
+    SCREEN_STOPWATCH,       /* stopwatch                                     */
+    SCREEN_STATS,           /* 7-day bar chart                               */
+    SCREEN_SETTINGS,        /* settings list                                 */
+    SCREEN_POWER_MENU,      /* sleep / cancel (BACK 5 s on home)             */
     SCREEN_COUNT,
-
-    /* Overlays (drawn on top of the current screen) */
-    OVERLAY_SLEEP_OPTIONS = 0x80,
 } ScreenId_t;
 
 /* ========================================================================== *
- *  Settings sub-menu items
+ *  Menu / settings items
  * ========================================================================== */
+#define MENU_ITEM_COUNT     7u
+
 typedef enum {
-    SETTING_BRIGHTNESS  = 0,
-    SETTING_BT_TOGGLE,
-    SETTING_RESET_STEPS,
-    SETTING_SLEEP_TIMER,
-    SETTING_ABOUT,
+    SETTING_BRIGHTNESS = 0,
+    SETTING_BLUETOOTH,
+    SETTING_RAISE_TO_WAKE,
+    SETTING_FALL_DETECT,
     SETTING_COUNT,
 } SettingItem_t;
 
+typedef enum {
+    WORKOUT_WALKING = 0,
+    WORKOUT_RUNNING,
+    WORKOUT_PUSHUPS,
+    WORKOUT_COUNT,
+} WorkoutMode_t;
+
 /* ========================================================================== *
- *  UI state
+ *  Measurement phase (used for HR & SpO2 screens)
+ * ========================================================================== */
+typedef enum {
+    MEAS_IDLE = 0,
+    MEAS_MEASURING,         /* progress ring filling                         */
+    MEAS_DONE,              /* result is ready, show it                      */
+} MeasPhase_t;
+
+/* ========================================================================== *
+ *  UI state (single global, owned by uiTask)
  * ========================================================================== */
 typedef struct {
-    ScreenId_t   current_screen;
-    ScreenId_t   overlay;           /**< Active overlay (0 = none)           */
+    ScreenId_t    screen;
+    ScreenId_t    prev_screen;       /* for BACK navigation                   */
 
-    /* Settings cursor */
-    uint8_t      settings_cursor;   /**< Highlighted item in settings menu   */
+    /* Menu / settings scrolling */
+    uint8_t       menu_cursor;       /* highlighted row in SCREEN_MENU        */
+    uint8_t       settings_cursor;   /* highlighted row in SCREEN_SETTINGS    */
 
-    /* Sleep options overlay cursor */
-    uint8_t      sleep_cursor;      /**< 0 = "Sleep Now", 1 = "Cancel"       */
+    /* HR / SpO2 measurement state */
+    MeasPhase_t   meas_phase;
+    uint8_t       meas_progress;     /* 0-100: arc fill %                     */
+    uint32_t      meas_start_tick;
+    uint16_t      meas_bpm_result;
+    uint8_t       meas_spo2_result;
+    uint8_t       heart_anim_frame;  /* 0 or 1 for beat animation             */
+    uint32_t      heart_anim_tick;
 
-    /* User settings values */
-    uint8_t      brightness;        /**< 0–100 %                            */
-    bool         bt_enabled;
-    uint32_t     sleep_timer_ms;    /**< 0 = never sleep                     */
+    /* Workout */
+    WorkoutMode_t workout_mode;
+    bool          workout_active;
+    uint32_t      workout_reps;      /* steps or push-up reps                 */
+    uint32_t      workout_start_tick;
 
-    uint32_t     last_activity_tick; /**< FreeRTOS tick of last user input   */
+    /* Settings values */
+    uint8_t       brightness;        /* 0-100                                 */
+    bool          bt_enabled;
+    bool          raise_to_wake;
+    bool          fall_detect;
+
+    /* Power menu cursor */
+    uint8_t       power_cursor;      /* 0=Sleep 1=Cancel                      */
+
+    /* Last user input tick */
+    uint32_t      last_activity_tick;
 } UIState_t;
 
 /* ========================================================================== *
  *  API
  * ========================================================================== */
-
-/**
- * @brief  Initialise UI state to defaults.
- */
 void UI_Init(void);
-
-/**
- * @brief  Task function — uiTask body.
- *         Reads button events, updates state, re-renders OLED.
- *         Never returns.
- */
 void UI_Task(void const *argument);
-
-/**
- * @brief  Process a single button event and update UI state accordingly.
- *         Separated for unit-testing without FreeRTOS.
- */
 void UI_HandleButtonEvent(const ButtonEvent_t *evt);
-
-/**
- * @brief  Render the current screen to the OLED framebuffer and flush.
- *         Reads from gSharedData (acquires xSensorDataMutex internally).
- */
 void UI_Render(void);
-
-/**
- * @brief  Force a full redraw on the next UI_Render() call.
- */
 void UI_Invalidate(void);
 
-/**
- * @brief  Get the currently active screen ID.
- */
 ScreenId_t UI_GetCurrentScreen(void);
-
-/**
- * @brief  Programmatically navigate to a screen (e.g. from power manager).
- */
-void UI_SetScreen(ScreenId_t screen);
-
-/**
- * @brief  Show or hide the sleep options overlay.
- */
-void UI_ShowSleepOverlay(bool show);
+void       UI_SetScreen(ScreenId_t screen);
+void       UI_ShowSleepOverlay(bool show);   /* power_manager compatibility   */
 
 #ifdef __cplusplus
 }

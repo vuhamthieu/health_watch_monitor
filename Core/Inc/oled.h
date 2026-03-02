@@ -31,14 +31,14 @@ typedef enum {
  *  Icon IDs (16×16 bitmaps stored in Flash)
  * ========================================================================== */
 typedef enum {
-    ICON_HEART      = 0,
-    ICON_SPO2,
-    ICON_STEPS,
-    ICON_BT_ON,
-    ICON_BT_OFF,
-    ICON_BATTERY,
-    ICON_ALERT,
-    ICON_SLEEP,
+    ICON_HEART_SMALL = 0,   /* 16x16 retro heart                            */
+    ICON_HEART_BIG,         /* 24x24 beating heart (frame 0 normal)         */
+    ICON_HEART_BIG2,        /* 24x24 beating heart (frame 1 expanded)       */
+    ICON_SHOE,              /* 16x16 retro shoe / steps                     */
+    ICON_BT_ON,             /* 12x16 Bluetooth symbol                       */
+    ICON_BT_OFF,            /* 12x16 Bluetooth symbol with cross            */
+    ICON_CHARGING,          /* 12x16 lightning bolt                         */
+    ICON_ALERT,             /* 16x16 exclamation triangle                   */
     ICON_COUNT,
 } OledIcon_t;
 
@@ -85,6 +85,12 @@ uint8_t OLED_DrawStr(uint8_t x, uint8_t y, const char *str, OledFont_t font, uin
  */
 void OLED_Printf(uint8_t x, uint8_t y, OledFont_t font, uint8_t color, const char *fmt, ...);
 
+/** @brief  Draw a single 6×8 character scaled up by @p scale (e.g. 2 = 12×16). */
+void OLED_DrawCharScaled(uint8_t x, uint8_t y, char ch, uint8_t scale, uint8_t color);
+
+/** @brief  Draw a string with uniform integer scaling. */
+void OLED_DrawStrScaled(uint8_t x, uint8_t y, const char *str, uint8_t scale, uint8_t color);
+
 /* ========================================================================== *
  *  API — Graphics Primitives
  * ========================================================================== */
@@ -106,75 +112,54 @@ void OLED_DrawIcon(uint8_t x, uint8_t y, OledIcon_t icon);
 /* ========================================================================== *
  *  API — Progress / Indicators
  * ========================================================================== */
-
-/**
- * @brief  Draw a horizontal progress bar.
- * @param  value   Current value.
- * @param  max_val Maximum value (bar = full at max_val).
- */
 void OLED_DrawProgressBar(uint8_t x, uint8_t y, uint8_t w, uint8_t h,
                           uint32_t value, uint32_t max_val);
-
-/**
- * @brief  Draw 5 filled/empty circles indicating signal/quality level (0–5).
- */
-void OLED_DrawLevelDots(uint8_t x, uint8_t y, uint8_t level, uint8_t max_level);
+void OLED_DrawArc(uint8_t cx, uint8_t cy, uint8_t r, uint8_t pct, uint8_t color);
+void OLED_DrawBatteryIcon(uint8_t x, uint8_t y, uint8_t bars,
+                          bool charging, bool full);
 
 /* ========================================================================== *
- *  API — Screen Pages (pre-composed layouts called by uiTask)
+ *  API — Screen Pages
  * ========================================================================== */
+#include "sensor_data.h"
+#include "ui_menu.h"
 
-/**
- * @brief  Draw the main watch-face screen.
- * @param  bpm       Heart rate (0 = invalid → show "---").
- * @param  spo2      SpO2 % (0 = invalid).
- * @param  steps     Step count.
- * @param  clk_h/m   Current time.
- * @param  bt_conn   Bluetooth connected flag.
- * @param  hr_alert  Show heart alert icon.
- * @param  spo2_alert Show SpO2 alert icon.
- */
-void OLED_PageMain(uint16_t bpm, uint8_t spo2, uint32_t steps,
-                   uint8_t clk_h, uint8_t clk_m,
-                   bool bt_conn, bool hr_alert, bool spo2_alert);
+/* Retro homescreen */
+void OLED_PageHome(const SoftClock_t *clk, const BatteryStatus_t *bat,
+                   bool bt_enabled, bool bt_connected);
 
-/**
- * @brief  Draw the heart rate detail screen.
- */
-void OLED_PageHeartRate(uint16_t bpm, bool alert, const char *status_str);
+/* Scrollable main menu */
+void OLED_PageMenu(uint8_t cursor, uint8_t scroll_offset);
 
-/**
- * @brief  Draw the SpO2 detail screen.
- */
-void OLED_PageSpO2(uint8_t spo2, bool alert, const char *status_str);
+/* HR measurement: beating heart + circular progress ring */
+void OLED_PageHRMeasure(MeasPhase_t phase, uint8_t progress,
+                        uint8_t anim_frame, uint16_t bpm_result);
 
-/**
- * @brief  Draw the step counter detail screen.
- */
-void OLED_PageSteps(uint32_t steps, float dist_m, float cal_kcal, uint32_t goal);
+/* SpO2 measurement */
+void OLED_PageSpO2Measure(MeasPhase_t phase, uint8_t progress,
+                          uint8_t spo2_result);
 
-/**
- * @brief  Draw the Bluetooth status screen.
- */
-void OLED_PageBluetooth(bool connected, const char *device_name);
+/* EEG placeholder */
+void OLED_PageEEG(void);
 
-/**
- * @brief  Draw the settings menu.
- * @param  items      Array of menu item strings.
- * @param  count      Number of items.
- * @param  selected   Index of currently highlighted item.
- */
-void OLED_PageSettings(const char *items[], uint8_t count, uint8_t selected);
+/* Workout screen */
+void OLED_PageWorkout(WorkoutMode_t mode, bool active,
+                      uint32_t reps, uint32_t elapsed_s);
 
-/**
- * @brief  Draw the Sleep Options overlay (centred popup).
- * @param  selected  0 = "Sleep Now", 1 = "Cancel".
- */
-void OLED_PageSleepOptions(uint8_t selected);
+/* Stopwatch */
+void OLED_PageStopwatch(uint32_t elapsed_ms, bool running);
 
-/**
- * @brief  Draw a simple splash / boot screen.
- */
+/* 7-day bar chart statistics */
+void OLED_PageStats(const WeekStats_t *stats);
+
+/* Settings list */
+void OLED_PageSettings(uint8_t cursor, bool bt_en,
+                       bool raise_wake, bool fall_det, uint8_t brightness);
+
+/* Power/sleep menu */
+void OLED_PagePowerMenu(uint8_t cursor);
+
+/* Splash screen */
 void OLED_PageSplash(void);
 
 #ifdef __cplusplus

@@ -68,6 +68,7 @@ typedef struct {
  *         send AT setup commands if module is in AT mode.
  */
 JDY31_Status_t JDY31_Init(void);
+void           JDY31_UartRxCplt(void); /* call from HAL_UART_RxCpltCallback */
 
 /**
  * @brief  Check if a Bluetooth device is currently connected.

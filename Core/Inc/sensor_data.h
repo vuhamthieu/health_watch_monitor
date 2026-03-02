@@ -81,6 +81,41 @@ typedef struct {
 } SoftClock_t;
 
 /* ========================================================================== *
+ *  Battery charge state (from TP4057 status pins)
+ * ========================================================================== */
+typedef enum {
+    BATT_UNKNOWN    = 0,   /**< Pins not yet read                            */
+    BATT_DISCHARGING,      /**< Normal use, no charger connected             */
+    BATT_CHARGING,         /**< CHRG pin LOW = charge in progress            */
+    BATT_FULL,             /**< STDBY pin LOW = charge complete              */
+} BattChargeState_t;
+
+typedef struct {
+    uint8_t           bars;        /**< 0–4 bars derived from VREF ADC        */
+    BattChargeState_t charge;      /**< Charging / full / discharging         */
+} BatteryStatus_t;
+
+/* ========================================================================== *
+ *  Stopwatch
+ * ========================================================================== */
+typedef struct {
+    bool      running;      /**< Timer is counting                           */
+    uint32_t  elapsed_ms;   /**< Total elapsed time in ms                    */
+    uint32_t  start_tick;   /**< xTaskGetTickCount() when last started       */
+} StopwatchData_t;
+
+/* ========================================================================== *
+ *  7-day statistics (ring buffer, resets every Monday)
+ * ========================================================================== */
+#include "app_config.h"
+typedef struct {
+    uint32_t  daily_steps[STATS_DAYS];  /**< Steps per day [0]=oldest        */
+    uint16_t  daily_hr_avg[STATS_DAYS]; /**< Avg BPM per day                 */
+    uint8_t   day_index;                /**< Current day slot (0–6)          */
+    uint8_t   days_recorded;            /**< How many days have valid data    */
+} WeekStats_t;
+
+/* ========================================================================== *
  *  Bluetooth / connectivity status
  * ========================================================================== */
 typedef struct {
@@ -92,10 +127,13 @@ typedef struct {
  *  Master shared data block
  * ========================================================================== */
 typedef struct {
-    HeartData_t  heart;
-    MotionData_t motion;
-    SoftClock_t  clock;
-    BleStatus_t  ble;
+    HeartData_t     heart;
+    MotionData_t    motion;
+    SoftClock_t     clock;
+    BleStatus_t     ble;
+    BatteryStatus_t battery;
+    StopwatchData_t stopwatch;
+    WeekStats_t     stats;
 } SharedData_t;
 
 /* ========================================================================== *
@@ -105,6 +143,9 @@ typedef struct {
 
 /** Mutex protecting SharedData_t gSharedData */
 extern osMutexId xSensorDataMutex;
+
+/** Mutex protecting the shared I2C1 bus (MPU-6050 + MAX30102) */
+extern osMutexId i2cMutexHandle;
 
 /** Queue: buttonTask → uiTask, powerTask.  Item = ButtonEvent_t (button.h) */
 extern osMessageQId xButtonEventQueue;
