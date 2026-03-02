@@ -1,44 +1,22 @@
-/* USER CODE BEGIN Header */
-/**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
-/* USER CODE END Header */
-/* Includes ------------------------------------------------------------------*/
+/* main.c — FreeRTOS task startup, peripheral init, battery reading */
 #include "main.h"
 #include "cmsis_os.h"
 
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
-
-/* USER CODE END Includes */
+#include "sensor_data.h"
+#include "button.h"
+#include "ui_menu.h"
+#include "power_manager.h"
+#include "jdy31.h"
+#include "mpu6050.h"
+#include "max30102.h"
+#include "heart_rate.h"
+#include "spo2.h"
+#include "step_counter.h"
+#include "app_config.h"
 
 /* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
-
 /* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-
-/* USER CODE END PD */
-
 /* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
@@ -69,140 +47,136 @@ void StartTask05(void const * argument);
 void StartTask06(void const * argument);
 
 /* USER CODE BEGIN PFP */
-
+static void     Batt_VREF_ADC_Init(void);
+static uint8_t  Batt_VREF_ReadBars(void);
+static BattChargeState_t Batt_TP4057_ReadCharge(void);
 /* USER CODE END PFP */
 
-/* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/* Battery via internal VREF (ADC1 ch17): higher raw count = lower Vdd.
+ * Thresholds defined in app_config.h (BATT_VREF_*_COUNTS).
+ * TP4057 CHRG (PA5) LOW = charging, STDBY (PA6) LOW = charge complete. */
+static void Batt_VREF_ADC_Init(void)
+{
+    /* PCLK2 = 64 MHz → /6 ≈ 10.7 MHz ADC clock (must be ≤14 MHz) */
+    RCC->CFGR = (RCC->CFGR & ~(3u << 14u)) | (2u << 14u);
+    /* Enable ADC1 clock */
+    RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
+    ADC1->CR2 = ADC_CR2_TSVREFE | ADC_CR2_ADON;
+    for (volatile uint32_t d = 0; d < 500u; d++); /* tSTAB ≥1 µs */
+    ADC1->CR2 |= ADC_CR2_RSTCAL;
+    while (ADC1->CR2 & ADC_CR2_RSTCAL);
+    ADC1->CR2 |= ADC_CR2_CAL;
+    while (ADC1->CR2 & ADC_CR2_CAL);
+    ADC1->SQR1  = 0u;
+    ADC1->SQR3  = 17u;                /* channel 17 = internal VREF */
+    ADC1->SMPR1 = ADC_SMPR1_SMP17;   /* 239.5-cycle sampling */
+    ADC1->CR2 |= ADC_CR2_EXTTRIG | ADC_CR2_EXTSEL; /* SW trigger */
 
+    /* TP4057 status pins PA5 (CHRG) and PA6 (STDBY) — input pull-up */
+    GPIO_InitTypeDef g = {0};
+    g.Pin  = TP4057_CHRG_PIN | TP4057_STDBY_PIN;
+    g.Mode = GPIO_MODE_INPUT;
+    g.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(TP4057_CHRG_PORT, &g);
+}
+
+static uint8_t Batt_VREF_ReadBars(void)
+{
+    ADC1->SR &= ~ADC_SR_EOC;
+    ADC1->CR2 |= ADC_CR2_SWSTART;
+    uint32_t deadline = HAL_GetTick() + 3u;
+    while (!(ADC1->SR & ADC_SR_EOC) && (HAL_GetTick() < deadline));
+    if (!(ADC1->SR & ADC_SR_EOC)) return BATT_BARS_EMPTY;
+    uint32_t raw = ADC1->DR & 0x0FFFu;
+    /* Higher raw = lower Vdd */
+    if (raw <= BATT_VREF_IDEAL_COUNTS)  return BATT_BARS_FULL;
+    if (raw <= (BATT_VREF_IDEAL_COUNTS + (BATT_VREF_LOW_COUNTS - BATT_VREF_IDEAL_COUNTS) / 3u))
+                                         return BATT_BARS_HIGH;
+    if (raw <= (BATT_VREF_IDEAL_COUNTS + 2u * (BATT_VREF_LOW_COUNTS - BATT_VREF_IDEAL_COUNTS) / 3u))
+                                         return BATT_BARS_MED;
+    if (raw <= BATT_VREF_LOW_COUNTS)     return BATT_BARS_LOW;
+    return BATT_BARS_EMPTY;
+}
+
+static BattChargeState_t Batt_TP4057_ReadCharge(void)
+{
+    bool chrg  = (HAL_GPIO_ReadPin(TP4057_CHRG_PORT,  TP4057_CHRG_PIN)  == GPIO_PIN_RESET);
+    bool stdby = (HAL_GPIO_ReadPin(TP4057_STDBY_PORT, TP4057_STDBY_PIN) == GPIO_PIN_RESET);
+    if (stdby)  return BATT_FULL;
+    if (chrg)   return BATT_CHARGING;
+    return BATT_DISCHARGING;
+}
 /* USER CODE END 0 */
 
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
-  /* MCU Configuration--------------------------------------------------------*/
-
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
   /* USER CODE END Init */
 
-  /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
   /* USER CODE END SysInit */
 
-  /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  Batt_VREF_ADC_Init();
+  Sensor_Data_Init();
   /* USER CODE END 2 */
 
-  /* Create the mutex(es) */
-  /* definition and creation of i2cMutex */
   osMutexDef(i2cMutex);
   i2cMutexHandle = osMutexCreate(osMutex(i2cMutex));
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
-
   /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
   /* USER CODE END RTOS_SEMAPHORES */
-
   /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
-
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
-  /* Create the thread(s) */
-  /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 256);
-  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
-
-  /* definition and creation of uiTask */
-  osThreadDef(uiTask, StartTask02, osPriorityNormal, 0, 512);
-  uiTaskHandle = osThreadCreate(osThread(uiTask), NULL);
-
-  /* definition and creation of sensorTask */
-  osThreadDef(sensorTask, StartTask03, osPriorityAboveNormal, 0, 512);
-  sensorTaskHandle = osThreadCreate(osThread(sensorTask), NULL);
-
-  /* definition and creation of bleTask */
-  osThreadDef(bleTask, StartTask04, osPriorityBelowNormal, 0, 512);
-  bleTaskHandle = osThreadCreate(osThread(bleTask), NULL);
-
-  /* definition and creation of buttonTask */
-  osThreadDef(buttonTask, StartTask05, osPriorityNormal, 0, 256);
-  buttonTaskHandle = osThreadCreate(osThread(buttonTask), NULL);
-
-  /* definition and creation of powerTask */
-  osThreadDef(powerTask, StartTask06, osPriorityHigh, 0, 256);
-  powerTaskHandle = osThreadCreate(osThread(powerTask), NULL);
+  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal,      0, 256);
+  defaultTaskHandle  = osThreadCreate(osThread(defaultTask),  NULL);
+  osThreadDef(uiTask,      StartTask02,      osPriorityNormal,      0, 512);
+  uiTaskHandle       = osThreadCreate(osThread(uiTask),       NULL);
+  osThreadDef(sensorTask,  StartTask03,      osPriorityAboveNormal, 0, 512);
+  sensorTaskHandle   = osThreadCreate(osThread(sensorTask),   NULL);
+  osThreadDef(bleTask,     StartTask04,      osPriorityBelowNormal, 0, 512);
+  bleTaskHandle      = osThreadCreate(osThread(bleTask),      NULL);
+  osThreadDef(buttonTask,  StartTask05,      osPriorityNormal,      0, 256);
+  buttonTaskHandle   = osThreadCreate(osThread(buttonTask),   NULL);
+  osThreadDef(powerTask,   StartTask06,      osPriorityHigh,        0, 256);
+  powerTaskHandle    = osThreadCreate(osThread(powerTask),    NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
-  /* Start scheduler */
   osKernelStart();
 
-  /* We should never get here as control is now taken by the scheduler */
-
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-  }
-  /* USER CODE END 3 */
+  while (1) {}
 }
 
-/**
-  * @brief System Clock Configuration
-  * @retval None
-  */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-
-  /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI_DIV2;
   RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL16;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) { Error_Handler(); }
 
-  /** Initializes the CPU, AHB and APB buses clocks
-  */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
@@ -210,26 +184,14 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) { Error_Handler(); }
 }
 
-/**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
 static void MX_I2C1_Init(void)
 {
-
   /* USER CODE BEGIN I2C1_Init 0 */
-
   /* USER CODE END I2C1_Init 0 */
-
   /* USER CODE BEGIN I2C1_Init 1 */
-
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
   hi2c1.Init.ClockSpeed = 100000;
@@ -240,59 +202,34 @@ static void MX_I2C1_Init(void)
   hi2c1.Init.OwnAddress2 = 0;
   hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
   hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK) { Error_Handler(); }
   /* USER CODE BEGIN I2C1_Init 2 */
-
   /* USER CODE END I2C1_Init 2 */
-
 }
 
-/**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
 static void MX_USART1_UART_Init(void)
 {
-
   /* USER CODE BEGIN USART1_Init 0 */
-
   /* USER CODE END USART1_Init 0 */
-
   /* USER CODE BEGIN USART1_Init 1 */
-
   /* USER CODE END USART1_Init 1 */
   huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
+  huart1.Init.BaudRate = 9600;
   huart1.Init.WordLength = UART_WORDLENGTH_8B;
   huart1.Init.StopBits = UART_STOPBITS_1;
   huart1.Init.Parity = UART_PARITY_NONE;
   huart1.Init.Mode = UART_MODE_TX_RX;
   huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
   huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
+  if (HAL_UART_Init(&huart1) != HAL_OK) { Error_Handler(); }
   /* USER CODE BEGIN USART1_Init 2 */
-
   /* USER CODE END USART1_Init 2 */
-
 }
 
-/**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
-
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
@@ -327,172 +264,227 @@ static void MX_GPIO_Init(void)
   HAL_NVIC_EnableIRQ(EXTI0_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
 
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == BTN_BACK_PIN) {
+        Button_EXTI_Callback(); /* wake from sleep / notify power manager */
+    }
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1) {
+        JDY31_UartRxCplt();
+    }
+}
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
-/**
-  * @brief  Function implementing the defaultTask thread.
-  * @param  argument: Not used
-  * @retval None
-  */
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void const * argument)
 {
   /* USER CODE BEGIN 5 */
-  /* Infinite loop */
+  (void)argument;
+  uint8_t  half    = 0;
+  uint16_t bat_cnt = 0;
   for(;;)
   {
-    osDelay(1);
+    LED_TOGGLE();
+    if (++half >= 2u) {
+      half = 0;
+      /* tick software clock every 1 s */
+      SoftClock_t c = Sensor_Data_GetClock();
+      if (++c.seconds >= 60u) { c.seconds = 0;
+        if (++c.minutes >= 60u) { c.minutes = 0;
+          if (++c.hours >= 24u) c.hours = 0;
+        }
+      }
+      Sensor_Data_SetClock(c.hours, c.minutes, c.seconds);
+      /* read battery every 30 s */
+      if (++bat_cnt >= 30u) {
+        bat_cnt = 0;
+        uint8_t          bars   = Batt_VREF_ReadBars();
+        BattChargeState_t charge = Batt_TP4057_ReadCharge();
+        if (osMutexWait(xSensorDataMutex, 5) == osOK) {
+          gSharedData.battery.bars   = bars;
+          gSharedData.battery.charge = charge;
+          osMutexRelease(xSensorDataMutex);
+        }
+      }
+    }
+    osDelay(500);
   }
   /* USER CODE END 5 */
 }
 
 /* USER CODE BEGIN Header_StartTask02 */
-/**
-* @brief Function implementing the uiTask thread.
-* @param argument: Not used
-* @retval None
-*/
 /* USER CODE END Header_StartTask02 */
 void StartTask02(void const * argument)
 {
   /* USER CODE BEGIN StartTask02 */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
+  UI_Task(argument);
   /* USER CODE END StartTask02 */
 }
 
 /* USER CODE BEGIN Header_StartTask03 */
-/**
-* @brief Function implementing the sensorTask thread.
-* @param argument: Not used
-* @retval None
-*/
 /* USER CODE END Header_StartTask03 */
 void StartTask03(void const * argument)
 {
   /* USER CODE BEGIN StartTask03 */
-  /* Infinite loop */
-  for(;;)
+  (void)argument;
+
+  /* Init sensors under I2C mutex */
+  osMutexWait(i2cMutexHandle, osWaitForever);
+  MPU6050_Status_t  mpu_status = MPU6050_Init();
+  MAX30102_Status_t max_status = MAX30102_Init();
+  if (max_status == MAX30102_OK) {
+      MAX30102_SetLEDCurrent(0x3F, 0x3F); /* ~12 mA — visible red glow */
+      MAX30102_FlushFIFO();
+  }
+  osMutexRelease(i2cMutexHandle);
+
+  /* Calibrate MPU — device should be flat and still at boot */
+  if (mpu_status == MPU6050_OK) {
+      osMutexWait(i2cMutexHandle, osWaitForever);
+      MPU6050_Calibrate();
+      osMutexRelease(i2cMutexHandle);
+  }
+
+  HR_Reset();
+  SpO2_Reset();
+  StepCounter_Reset();
+
+  bool mpu_ok = (mpu_status == MPU6050_OK);
+  bool max_ok = (max_status == MAX30102_OK);
+  MAX30102_Sample_t fifo_buf[8];
+  uint8_t  fifo_cnt = 0;
+  uint32_t loop_cnt = 0u;
+
+  for (;;)
   {
-    osDelay(1);
+      if (mpu_ok) {
+          MPU6050_Data_t imu;
+          osMutexWait(i2cMutexHandle, osWaitForever);
+          bool imu_ok = (MPU6050_Read(&imu) == MPU6050_OK);
+          osMutexRelease(i2cMutexHandle);
+
+          if (imu_ok) {
+              StepCounter_Update(imu.accel_g[0], imu.accel_g[1], imu.accel_g[2]);
+              if ((loop_cnt % 10u) == 0u) {
+                  int activity = StepCounter_GetActivityState();
+                  if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+                      gSharedData.motion.steps         = StepCounter_GetSteps();
+                      gSharedData.motion.distance_m    = StepCounter_GetDistance();
+                      gSharedData.motion.calories_kcal = StepCounter_GetCalories();
+                      gSharedData.motion.activity      = (ActivityState_t)activity;
+                      gSharedData.motion.status        = SENSOR_OK;
+                      osMutexRelease(xSensorDataMutex);
+                  }
+              }
+          } else {
+              if (gSharedData.motion.status != SENSOR_FAULT) {
+                  if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+                      gSharedData.motion.status = SENSOR_FAULT;
+                      osMutexRelease(xSensorDataMutex);
+                  }
+              }
+          }
+      }
+
+      if (max_ok) {
+          osMutexWait(i2cMutexHandle, osWaitForever);
+          MAX30102_Status_t fs = MAX30102_ReadFIFO(fifo_buf, 8, &fifo_cnt);
+          osMutexRelease(i2cMutexHandle);
+
+          if (fs == MAX30102_OK) {
+              for (uint8_t s = 0; s < fifo_cnt; s++) {
+                  HR_AddSample(fifo_buf[s].ir);
+                  SpO2_AddSample(fifo_buf[s].red, fifo_buf[s].ir);
+              }
+              if ((loop_cnt % 50u) == 0u) {
+                  uint16_t bpm  = 0;
+                  uint8_t  spo2 = 0;
+                  bool hr_valid   = HR_GetBPM(&bpm);
+                  bool spo2_valid = SpO2_GetValue(&spo2);
+                  bool finger     = HR_FingerPresent();
+                  bool tach, brad;
+                  HR_GetAlertStatus(&tach, &brad);
+                  if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+                      gSharedData.heart.bpm         = hr_valid   ? bpm  : 0u;
+                      gSharedData.heart.spo2        = spo2_valid ? spo2 : 0u;
+                      gSharedData.heart.hr_status   = finger ? (hr_valid   ? SENSOR_OK : SENSOR_INIT) : SENSOR_NO_FINGER;
+                      gSharedData.heart.spo2_status = finger ? (spo2_valid ? SENSOR_OK : SENSOR_INIT) : SENSOR_NO_FINGER;
+                      gSharedData.heart.hr_alert    = tach || brad;
+                      gSharedData.heart.spo2_alert  = SpO2_IsLowAlert();
+                      osMutexRelease(xSensorDataMutex);
+                  }
+              }
+          }
+      }
+
+      loop_cnt++;
+      osDelay(10); /* 100 Hz */
   }
   /* USER CODE END StartTask03 */
 }
 
 /* USER CODE BEGIN Header_StartTask04 */
-/**
-* @brief Function implementing the bleTask thread.
-* @param argument: Not used
-* @retval None
-*/
 /* USER CODE END Header_StartTask04 */
 void StartTask04(void const * argument)
 {
   /* USER CODE BEGIN StartTask04 */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
+  (void)argument;
+  JDY31_Init();
+  for(;;) { osDelay(100); }
   /* USER CODE END StartTask04 */
 }
 
 /* USER CODE BEGIN Header_StartTask05 */
-/**
-* @brief Function implementing the buttonTask thread.
-* @param argument: Not used
-* @retval None
-*/
 /* USER CODE END Header_StartTask05 */
 void StartTask05(void const * argument)
 {
   /* USER CODE BEGIN StartTask05 */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
+  Button_Task(argument);
   /* USER CODE END StartTask05 */
 }
 
 /* USER CODE BEGIN Header_StartTask06 */
-/**
-* @brief Function implementing the powerTask thread.
-* @param argument: Not used
-* @retval None
-*/
 /* USER CODE END Header_StartTask06 */
 void StartTask06(void const * argument)
 {
   /* USER CODE BEGIN StartTask06 */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
+  Power_Task(argument);
   /* USER CODE END StartTask06 */
 }
 
-/**
-  * @brief  Period elapsed callback in non blocking mode
-  * @note   This function is called  when TIM2 interrupt took place, inside
-  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
-  * a global variable "uwTick" used as application time base.
-  * @param  htim : TIM handle
-  * @retval None
-  */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
-
   /* USER CODE END Callback 0 */
-  if (htim->Instance == TIM2)
-  {
-    HAL_IncTick();
-  }
+  if (htim->Instance == TIM2) { HAL_IncTick(); }
   /* USER CODE BEGIN Callback 1 */
-
   /* USER CODE END Callback 1 */
 }
 
-/**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
-  {
-  }
+  while (1) {}
   /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef  USE_FULL_ASSERT
-/**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
+#ifdef USE_FULL_ASSERT
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  (void)file; (void)line;
   /* USER CODE END 6 */
 }
-#endif /* USE_FULL_ASSERT */
+#endif

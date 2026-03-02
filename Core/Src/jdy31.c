@@ -17,6 +17,7 @@
 #include "cmsis_os.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ========================================================================== *
  *  RX ring buffer
@@ -98,9 +99,12 @@ JDY31_Status_t JDY31_SendRaw(const uint8_t *data, uint16_t len)
     return (ret == HAL_OK) ? JDY31_OK : JDY31_ERR_UART;
 }
 
-/* ========================================================================== *
- *  RX callback (called from HAL_UART_RxCpltCallback in stm32f1xx_it.c)
- * ========================================================================== */
+/* called from HAL_UART_RxCpltCallback in main.c */
+void JDY31_UartRxCplt(void)
+{
+    JDY31_RxCallback(s_rx_byte);
+}
+
 void JDY31_RxCallback(uint8_t byte)
 {
     /* Store in ring buffer */

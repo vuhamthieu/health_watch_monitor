@@ -24,6 +24,8 @@ void Sensor_Data_Init(void)
     gSharedData.heart.hr_status   = SENSOR_INIT;
     gSharedData.heart.spo2_status = SENSOR_INIT;
     gSharedData.motion.status     = SENSOR_INIT;
+    gSharedData.battery.bars      = BATT_BARS_FULL;
+    gSharedData.battery.charge    = BATT_UNKNOWN;
 
     /* Create FreeRTOS objects */
     osMutexDef(SensorDataMutex);
