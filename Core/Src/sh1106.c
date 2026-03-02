@@ -1,47 +1,30 @@
-/**
- * @file    sh1106.c
- * @brief   SH1106 OLED low-level driver implementation.
- *
- * TODO (Phase 3):
- *  - Implement SH1106_Init() with full init command sequence
- *  - Implement SH1106_Flush() — write framebuffer page by page over I2C
- *  - Implement SH1106_DrawPixel() — set/clear bit in s_framebuf[]
- */
+/* sh1106.c - low-level SH1106 OLED driver: 1024-byte framebuffer + I2C flush */
 
 #include "sh1106.h"
-#include "sensor_data.h"   /* for xI2cMutex — TODO: add i2cMutex to sensor_data.h */
+#include "sensor_data.h"
 #include "cmsis_os.h"
 #include <string.h>
 
-/* ========================================================================== *
- *  Framebuffer (1024 bytes, stored in RAM)
- * ========================================================================== */
 static uint8_t s_framebuf[SH1106_BUF_SIZE];
 
-/* ========================================================================== *
- *  SH1106 Init Command Sequence
- * ========================================================================== */
 static const uint8_t SH1106_INIT_CMDS[] = {
-    0xAE,       /* Display OFF                          */
-    0xD5, 0x80, /* Set display clock divide ratio       */
-    0xA8, 0x3F, /* Set multiplex ratio: 64 lines (0x3F)*/
-    0xD3, 0x00, /* Set display offset: 0                */
-    0x40,       /* Set display start line: 0            */
-    0xAD, 0x8B, /* Enable internal DC-DC (SH1106)       */
-    0xA1,       /* Set segment re-map: col 127 → SEG0   */
-    0xC8,       /* Set COM output scan direction: remapped */
-    0xDA, 0x12, /* Set COM pins hardware config         */
-    0x81, 0xCF, /* Set contrast: 0xCF                   */
-    0xD9, 0xF1, /* Set pre-charge period                */
-    0xDB, 0x40, /* Set VCOMH deselect level             */
-    0xA4,       /* Entire display on: resume RAM        */
-    0xA6,       /* Set normal display (not inverted)    */
-    0xAF,       /* Display ON                           */
+    0xAE,
+    0xD5, 0x80,
+    0xA8, 0x3F,
+    0xD3, 0x00,
+    0x40,
+    0xAD, 0x8B, /* SH1106 internal DC-DC */
+    0xA1,
+    0xC8,
+    0xDA, 0x12,
+    0x81, 0xCF,
+    0xD9, 0xF1,
+    0xDB, 0x40,
+    0xA4,
+    0xA6,
+    0xAF,
 };
 
-/* ========================================================================== *
- *  Low-level I2C helpers
- * ========================================================================== */
 SH1106_Status_t SH1106_WriteCmd(uint8_t cmd)
 {
     uint8_t buf[2] = { 0x00, cmd }; /* Co=0, D/C#=0 → command byte */
@@ -52,25 +35,16 @@ SH1106_Status_t SH1106_WriteCmd(uint8_t cmd)
 
 SH1106_Status_t SH1106_WriteData(const uint8_t *data, uint16_t len)
 {
-    /* Prepend 0x40 control byte (Co=0, D/C#=1 → data stream) */
-    /* TODO: For efficiency, use a DMA or chunked approach */
+    /* Co=0, D/C#=1 → data stream */
     uint8_t ctrl = 0x40;
-    HAL_StatusTypeDef ret;
-
-    /* Send control byte then data as a single I2C transaction using
-     * the memory-write function — or use two sequential transmits */
-    ret = HAL_I2C_Mem_Write(
+    HAL_StatusTypeDef ret = HAL_I2C_Mem_Write(
         &APP_I2C_HANDLE, OLED_I2C_ADDR, ctrl,
         I2C_MEMADD_SIZE_8BIT, (uint8_t *)data, len, I2C_TIMEOUT_MS);
     return (ret == HAL_OK) ? SH1106_OK : SH1106_ERROR;
 }
 
-/* ========================================================================== *
- *  Init
- * ========================================================================== */
 SH1106_Status_t SH1106_Init(void)
 {
-    /* TODO: acquire xI2cMutex before sending commands */
     for (uint8_t i = 0; i < sizeof(SH1106_INIT_CMDS); i++) {
         if (SH1106_WriteCmd(SH1106_INIT_CMDS[i]) != SH1106_OK) {
             return SH1106_ERROR;
@@ -81,9 +55,6 @@ SH1106_Status_t SH1106_Init(void)
     return SH1106_OK;
 }
 
-/* ========================================================================== *
- *  Framebuffer operations
- * ========================================================================== */
 void SH1106_Clear(void)
 {
     memset(s_framebuf, 0x00, SH1106_BUF_SIZE);
@@ -121,17 +92,22 @@ uint8_t *SH1106_GetBuffer(void)
     return s_framebuf;
 }
 
-/* ========================================================================== *
- *  Flush — send all 8 pages to the OLED
- * ========================================================================== */
 SH1106_Status_t SH1106_Flush(void)
 {
-    /* TODO: acquire xI2cMutex (from sensor_data.h / main.h) */
+    /* All three devices (OLED, MPU-6050, MAX30102) share hi2c1.
+     * Acquire the I2C bus mutex before transmitting; guard NULL so
+     * this also works when called from SH1106_Init() before RTOS starts. */
+    bool held = (i2cMutexHandle != NULL);
+    if (held) osMutexWait(i2cMutexHandle, osWaitForever);
+
     for (uint8_t page = 0; page < SH1106_PAGES; page++) {
         if (SH1106_FlushPage(page) != SH1106_OK) {
+            if (held) osMutexRelease(i2cMutexHandle);
             return SH1106_ERROR;
         }
     }
+
+    if (held) osMutexRelease(i2cMutexHandle);
     return SH1106_OK;
 }
 
@@ -150,9 +126,6 @@ SH1106_Status_t SH1106_FlushPage(uint8_t page)
     return SH1106_WriteData(page_data, SH1106_WIDTH);
 }
 
-/* ========================================================================== *
- *  Display control
- * ========================================================================== */
 void SH1106_SetDisplayOn(bool on)
 {
     SH1106_WriteCmd(on ? 0xAF : 0xAE);

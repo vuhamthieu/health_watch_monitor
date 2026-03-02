@@ -8,6 +8,7 @@
 #include "app_config.h"
 #include "ui_menu.h"
 #include "cmsis_os.h"
+#include "queue.h"  
 
 /* state */
 static PowerState_t  s_state            = POWER_ACTIVE;
@@ -83,7 +84,10 @@ void Power_NotifyActivity(void)
 void Power_PostEvent(PowerEvent_t event, bool fromISR)
 {
     if (fromISR) {
-        osMessagePutFromISR(xPowerEventQueue, (uint32_t)event, NULL);
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        uint32_t val = (uint32_t)event;
+        xQueueSendFromISR(xPowerEventQueue, &val, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     } else {
         osMessagePut(xPowerEventQueue, (uint32_t)event, 0);
     }
