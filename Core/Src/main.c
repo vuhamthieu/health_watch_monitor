@@ -13,6 +13,14 @@
 #include "spo2.h"
 #include "step_counter.h"
 #include "app_config.h"
+#include <stdio.h>
+
+/* Retarget printf → UART1 (PA9=TX, 9600 baud) — connect CH340 RX to PA9 */
+int __io_putchar(int ch)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 10);
+    return ch;
+}
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -349,6 +357,16 @@ void StartTask03(void const * argument)
   }
   osMutexRelease(i2cMutexHandle);
 
+  /* Report sensor init results over UART (connect CH340 to PA9 at 9600 baud) */
+  printf("[BOOT] MPU6050 init: %s\r\n",
+      mpu_status == MPU6050_OK        ? "OK" :
+      mpu_status == MPU6050_ERR_I2C   ? "ERR_I2C (check wiring/pullups)" :
+                                        "ERR_WHOAMI (wrong addr? AD0 pin?)");
+  printf("[BOOT] MAX30102 init: %s\r\n",
+      max_status == MAX30102_OK         ? "OK" :
+      max_status == MAX30102_ERR_I2C    ? "ERR_I2C (check wiring/pullups)" :
+                                          "ERR_PARTID (chip not found)");
+
   /* Calibrate MPU — device should be flat and still at boot */
   if (mpu_status == MPU6050_OK) {
       osMutexWait(i2cMutexHandle, osWaitForever);
@@ -429,6 +447,28 @@ void StartTask03(void const * argument)
       }
 
       loop_cnt++;
+      /* Every 5 s: print live sensor values over UART for debugging */
+      if ((loop_cnt % 500u) == 0u) {
+          if (mpu_ok) {
+              MPU6050_Data_t d;
+              osMutexWait(i2cMutexHandle, osWaitForever);
+              MPU6050_Read(&d);
+              osMutexRelease(i2cMutexHandle);
+              printf("[MPU] ax=%.2f ay=%.2f az=%.2f steps=%lu\r\n",
+                  (double)d.accel_g[0], (double)d.accel_g[1], (double)d.accel_g[2],
+                  (unsigned long)StepCounter_GetSteps());
+          } else {
+              printf("[MPU] not connected\r\n");
+          }
+          if (max_ok) {
+              printf("[MAX] HR=%u bpm  SpO2=%u%%  finger=%s\r\n",
+                  (unsigned)gSharedData.heart.bpm,
+                  (unsigned)gSharedData.heart.spo2,
+                  HR_FingerPresent() ? "YES" : "NO");
+          } else {
+              printf("[MAX] not connected\r\n");
+          }
+      }
       osDelay(10); /* 100 Hz */
   }
   /* USER CODE END StartTask03 */

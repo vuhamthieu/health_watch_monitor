@@ -68,6 +68,12 @@ C_SOURCES += Core/Src/power_manager.c
 C_SOURCES += Core/Src/step_counter.c
 C_SOURCES += Core/Src/heart_rate.c
 C_SOURCES += Core/Src/spo2.c
+C_SOURCES += assets/icons/generated/micon_heart.c
+C_SOURCES += assets/icons/generated/micon_spo2.c
+C_SOURCES += assets/icons/generated/micon_workout.c
+C_SOURCES += assets/icons/generated/micon_stopwatch.c
+C_SOURCES += assets/icons/generated/micon_stats.c
+C_SOURCES += assets/icons/generated/micon_settings.c
 
 ######################################
 # Assembly Sources
@@ -107,7 +113,8 @@ C_INCLUDES = \
 -IDrivers/CMSIS/Include \
 -IMiddlewares/Third_Party/FreeRTOS/Source/include \
 -IMiddlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS \
--IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3
+-IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3 \
+-Iassets/icons/generated
 
 OPT = -Og
 
@@ -170,18 +177,22 @@ size: $(BUILD_DIR)/$(TARGET).elf
 clean:
 	-rm -fR $(BUILD_DIR)
 
-# Flash via OpenOCD + ST-Link V2
+# Flash via CH340 USB-UART (BOOT0 button + RST, then make flash) or use USB type C
+FLASH_PORT ?= /dev/ttyUSB0
+FLASH_BAUD ?= 115200
+
 flash: all
-	openocd -f interface/stlink.cfg \
-	        -f target/stm32f1x.cfg \
-	        -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
+	stm32flash -w $(BUILD_DIR)/$(TARGET).bin -v -g 0x0 -b $(FLASH_BAUD) $(FLASH_PORT)
 
 # Erase entire chip
 erase:
+	stm32flash -o -b $(FLASH_BAUD) $(FLASH_PORT)
+
+# Flash via ST-Link + OpenOCD (if you get one later)
+flash-stlink: all
 	openocd -f interface/stlink.cfg \
 	        -f target/stm32f1x.cfg \
-	        -c "init" -c "reset halt" \
-	        -c "stm32f1x mass_erase 0" -c "exit"
+	        -c "program $(BUILD_DIR)/$(TARGET).elf verify reset exit"
 
 # Include auto-generated dependency files
 -include $(wildcard $(BUILD_DIR)/*.d)

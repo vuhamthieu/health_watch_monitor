@@ -2,10 +2,9 @@
  *
  * Screens:
  *   SCREEN_HOME        – retro homescreen (clock / shoe / heart)
- *   SCREEN_MENU        – scrollable list of 7 apps
+ *   SCREEN_MENU        – scrollable list of 6 apps
  *   SCREEN_HR_MEASURE  – beating heart + circular progress ring
  *   SCREEN_SPO2_MEASURE
- *   SCREEN_EEG         – placeholder
  *   SCREEN_WORKOUT     – walk / run / push-up tracker
  *   SCREEN_STOPWATCH   – centisecond stopwatch
  *   SCREEN_STATS       – 7-day step bar chart
@@ -202,7 +201,6 @@ void UI_HandleButtonEvent(const ButtonEvent_t *evt)
                     static const ScreenId_t SCREEN_MAP[MENU_ITEM_COUNT] = {
                         SCREEN_HR_MEASURE,
                         SCREEN_SPO2_MEASURE,
-                        SCREEN_EEG,
                         SCREEN_WORKOUT,
                         SCREEN_STOPWATCH,
                         SCREEN_STATS,
@@ -248,12 +246,6 @@ void UI_HandleButtonEvent(const ButtonEvent_t *evt)
                     go_back();
                 }
             }
-            break;
-
-        /* ── EEG placeholder ──────────────────────────────────────── */
-        case SCREEN_EEG:
-            if (evt->type == BTN_EVT_PRESS && evt->id == BTN_ID_BACK)
-                go_back();
             break;
 
         /* ── Workout ──────────────────────────────────────────────── */
@@ -423,10 +415,6 @@ void UI_Render(void)
                 s_ui.meas_phase,
                 s_ui.meas_progress,
                 s_ui.meas_spo2_result);
-            break;
-
-        case SCREEN_EEG:
-            OLED_PageEEG();
             break;
 
         case SCREEN_WORKOUT:

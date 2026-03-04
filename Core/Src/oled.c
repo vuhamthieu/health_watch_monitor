@@ -7,6 +7,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include "micon_heart.h"
+#include "micon_spo2.h"
+#include "micon_workout.h"
+#include "micon_stopwatch.h"
+#include "micon_stats.h"
+#include "micon_settings.h"
 
 /* ========================================================================== *
  *  Font: 6×8  (ASCII 32–126, stored in Flash)
@@ -524,67 +530,10 @@ void OLED_PageHome(const SoftClock_t *clk, const BatteryStatus_t *bat,
  *  MSB (bit 7) = leftmost pixel of the byte.
  * ------------------------------------------------------------------ */
 
-/* Heart Rate — classic pixel-art heart */
-static const uint8_t MICON_HEART[32] = {
-    0x00,0x00,  0x36,0x6C,  0x7F,0xFE,  0xFF,0xFF,
-    0xFF,0xFF,  0xFF,0xFF,  0x7F,0xFE,  0x3F,0xFC,
-    0x1F,0xF8,  0x0F,0xF0,  0x07,0xE0,  0x03,0xC0,
-    0x01,0x80,  0x00,0x00,  0x00,0x00,  0x00,0x00,
-};
-
-/* SpO2 — circle (O) with subscript 2 dots */
-static const uint8_t MICON_SPO2[32] = {
-    0x1E,0x00,  0x3F,0x00,  0x63,0x00,  0x63,0x00,
-    0x63,0x00,  0x63,0xC0,  0x3F,0xE0,  0x1E,0x70,
-    0x00,0x38,  0x00,0x1C,  0x00,0x3E,  0x00,0x22,
-    0x00,0x3E,  0x00,0x00,  0x00,0x00,  0x00,0x00,
-};
-
-/* EEG — brainwave squiggle */
-static const uint8_t MICON_EEG[32] = {
-    0x00,0x00,  0x00,0x00,  0x04,0x00,  0x0E,0x00,
-    0x1B,0x00,  0x31,0x80,  0x60,0xC4,  0xC0,0x6E,
-    0xC0,0x73,  0x60,0xC0,  0x31,0x80,  0x1B,0x00,
-    0x0E,0x00,  0x04,0x00,  0x00,0x00,  0x00,0x00,
-};
-
-/* Workout — dumbbell (horizontal bar + two end weights) */
-static const uint8_t MICON_WORKOUT[32] = {
-    0x00,0x00,  0xC0,0x03,  0xC0,0x03,  0xE0,0x07,
-    0xFF,0xFF,  0xFF,0xFF,  0xE0,0x07,  0xC0,0x03,
-    0xC0,0x03,  0x00,0x00,  0x00,0x00,  0x00,0x00,
-    0x00,0x00,  0x00,0x00,  0x00,0x00,  0x00,0x00,
-};
-
-/* Stopwatch — circle with inner tick hand + crown on top */
-static const uint8_t MICON_STOPWATCH[32] = {
-    0x00,0x00,  0x42,0x42,  0x3C,0x3C,  0x1E,0x78,
-    0x3F,0xFC,  0x61,0x86,  0x41,0x82,  0x41,0xC2,
-    0x41,0x82,  0x61,0x86,  0x3F,0xFC,  0x1E,0x78,
-    0x00,0x00,  0x00,0x00,  0x00,0x00,  0x00,0x00,
-};
-
-/* Statistics — three ascending bar chart columns */
-static const uint8_t MICON_STATS[32] = {
-    0x00,0x00,  0x00,0x00,  0x00,0x10,  0x00,0x38,
-    0x00,0x38,  0x10,0x38,  0x38,0x38,  0x38,0x38,
-    0x38,0x38,  0x38,0x38,  0x38,0x38,  0x38,0x38,
-    0x7C,0x7C,  0x7C,0x7C,  0x00,0x00,  0x00,0x00,
-};
-
-/* Settings — 8-tooth gear/cog */
-static const uint8_t MICON_SETTINGS[32] = {
-    0x08,0x10,  0x1C,0x38,  0x7F,0xFE,  0xFF,0xFF,
-    0xE3,0xC7,  0xC1,0x83,  0xE3,0xC7,  0xFF,0xFF,
-    0xFF,0xFF,  0xE3,0xC7,  0xC1,0x83,  0xE3,0xC7,
-    0xFF,0xFF,  0x7F,0xFE,  0x1C,0x38,  0x08,0x10,
-};
-
 /* Pointer to each item's icon — order matches MENU_LABELS */
 static const uint8_t * const MENU_ICONS[MENU_ITEM_COUNT] = {
     MICON_HEART,
     MICON_SPO2,
-    MICON_EEG,
     MICON_WORKOUT,
     MICON_STOPWATCH,
     MICON_STATS,
@@ -594,7 +543,6 @@ static const uint8_t * const MENU_ICONS[MENU_ITEM_COUNT] = {
 static const char * const MENU_LABELS[MENU_ITEM_COUNT] = {
     "Heart Rate",
     "SpO2",
-    "EEG",
     "Workout",
     "Stopwatch",
     "Statistics",
@@ -664,8 +612,9 @@ void OLED_PageHRMeasure(MeasPhase_t phase, uint8_t progress,
                         uint8_t anim_frame, uint16_t bpm_result)
 {
     SH1106_Clear();
-    OLED_DrawStr(16, 0, "HEART RATE", OLED_FONT_6x8, 1);
-    OLED_DrawLine(0, 9, 127, 9, 1);
+    OLED_DrawBitmap(0, 0, 16, 16, MICON_HEART);
+    OLED_DrawStr(19, 4, "HEART RATE", OLED_FONT_6x8, 1);
+    OLED_DrawLine(0, 17, 127, 17, 1);
 
     if (phase == MEAS_IDLE) {
         OLED_DrawStr(16, 28, "Place finger", OLED_FONT_6x8, 1);
@@ -698,8 +647,9 @@ void OLED_PageSpO2Measure(MeasPhase_t phase, uint8_t progress,
                            uint8_t spo2_result)
 {
     SH1106_Clear();
-    OLED_DrawStr(34, 0, "SpO2", OLED_FONT_6x8, 1);
-    OLED_DrawLine(0, 9, 127, 9, 1);
+    OLED_DrawBitmap(0, 0, 16, 16, MICON_SPO2);
+    OLED_DrawStr(19, 4, "SpO2", OLED_FONT_6x8, 1);
+    OLED_DrawLine(0, 17, 127, 17, 1);
 
     if (phase == MEAS_IDLE) {
         OLED_DrawStr(16, 28, "Place finger", OLED_FONT_6x8, 1);
@@ -721,17 +671,6 @@ void OLED_PageSpO2Measure(MeasPhase_t phase, uint8_t progress,
     SH1106_Flush();
 }
 
-/* ── EEG placeholder ─────────────────────────────────────────────────────── */
-void OLED_PageEEG(void)
-{
-    SH1106_Clear();
-    OLED_DrawStr(46, 0, "EEG", OLED_FONT_6x8, 1);
-    OLED_DrawLine(0, 9, 127, 9, 1);
-    OLED_DrawStr(22, 26, "Coming soon", OLED_FONT_6x8, 1);
-    OLED_DrawStr(16, 38, "(EEG module)", OLED_FONT_6x8, 1);
-    SH1106_Flush();
-}
-
 /* ── Workout ──────────────────────────────────────────────────────────────── */
 void OLED_PageWorkout(WorkoutMode_t mode, bool active,
                       uint32_t reps, uint32_t elapsed_s)
@@ -740,27 +679,28 @@ void OLED_PageWorkout(WorkoutMode_t mode, bool active,
         "Walking", "Running", "Push-ups"
     };
     SH1106_Clear();
-    OLED_DrawStr(22, 0, "WORKOUT", OLED_FONT_6x8, 1);
-    OLED_DrawLine(0, 9, 127, 9, 1);
+    OLED_DrawBitmap(0, 0, 16, 16, MICON_WORKOUT);
+    OLED_DrawStr(19, 4, "WORKOUT", OLED_FONT_6x8, 1);
+    OLED_DrawLine(0, 17, 127, 17, 1);
 
     /* Mode name */
     uint8_t m = (mode < WORKOUT_PUSHUPS) ? (uint8_t)mode : (uint8_t)WORKOUT_PUSHUPS;
-    OLED_DrawStr(0, 11, MODE_NAMES[m], OLED_FONT_6x8, 1);
+    OLED_DrawStr(0, 19, MODE_NAMES[m], OLED_FONT_6x8, 1);
 
     /* Status */
-    OLED_DrawStr(90, 11, active ? "  RUN" : " STOP", OLED_FONT_6x8, 1);
+    OLED_DrawStr(90, 19, active ? "  RUN" : " STOP", OLED_FONT_6x8, 1);
 
     /* Reps / steps */
     if (mode == WORKOUT_PUSHUPS)
-        OLED_Printf(0, 26, OLED_FONT_6x8, 1, "Reps: %lu", (unsigned long)reps);
+        OLED_Printf(0, 30, OLED_FONT_6x8, 1, "Reps: %lu", (unsigned long)reps);
     else
-        OLED_Printf(0, 26, OLED_FONT_6x8, 1, "Steps:%lu", (unsigned long)reps);
+        OLED_Printf(0, 30, OLED_FONT_6x8, 1, "Steps:%lu", (unsigned long)reps);
 
     /* Elapsed HH:MM:SS */
     uint32_t hh = elapsed_s / 3600UL;
     uint32_t mm = (elapsed_s % 3600UL) / 60UL;
     uint32_t ss = elapsed_s % 60UL;
-    OLED_Printf(0, 38, OLED_FONT_6x8, 1, "Time:%02lu:%02lu:%02lu", hh, mm, ss);
+    OLED_Printf(0, 41, OLED_FONT_6x8, 1, "Time:%02lu:%02lu:%02lu", hh, mm, ss);
 
     /* Hints */
     OLED_DrawLine(0, 50, 127, 50, 1);
@@ -773,8 +713,9 @@ void OLED_PageWorkout(WorkoutMode_t mode, bool active,
 void OLED_PageStopwatch(uint32_t elapsed_ms, bool running)
 {
     SH1106_Clear();
-    OLED_DrawStr(16, 0, "STOPWATCH", OLED_FONT_6x8, 1);
-    OLED_DrawLine(0, 9, 127, 9, 1);
+    OLED_DrawBitmap(0, 0, 16, 16, MICON_STOPWATCH);
+    OLED_DrawStr(19, 4, "STOPWATCH", OLED_FONT_6x8, 1);
+    OLED_DrawLine(0, 17, 127, 17, 1);
 
     /* Decompose */
     uint32_t cs  = (elapsed_ms / 10UL) % 100UL;   /* centiseconds */
@@ -785,7 +726,7 @@ void OLED_PageStopwatch(uint32_t elapsed_ms, bool running)
     /* HH:MM:SS (2×) → 8 chars × 12 = 96px → x = 16 */
     char ts[12];
     snprintf(ts, sizeof(ts), "%02lu:%02lu:%02lu", hh, mm, ss);
-    OLED_DrawStrScaled(16, 13, ts, 2, 1);
+    OLED_DrawStrScaled(16, 19, ts, 2, 1);
 
     /* .cc smaller below */
     char cs_str[4];
@@ -806,8 +747,9 @@ void OLED_PageStopwatch(uint32_t elapsed_ms, bool running)
 void OLED_PageStats(const WeekStats_t *stats)
 {
     SH1106_Clear();
-    OLED_DrawStr(22, 0, "STATS (7d)", OLED_FONT_6x8, 1);
-    OLED_DrawLine(0, 9, 127, 9, 1);
+    OLED_DrawBitmap(0, 0, 16, 16, MICON_STATS);
+    OLED_DrawStr(19, 4, "STATS (7d)", OLED_FONT_6x8, 1);
+    OLED_DrawLine(0, 17, 127, 17, 1);
 
     /* Find max steps for scaling */
     uint32_t max_steps = 1UL;
@@ -820,18 +762,18 @@ void OLED_PageStats(const WeekStats_t *stats)
     static const char * const DAY_ABBR[7] = {
         "Mo","Tu","We","Th","Fr","Sa","Su"
     };
-    uint8_t max_bar_h = 38u; /* pixels available for bars: y=10 to y=48 */
+    uint8_t max_bar_h = 30u; /* pixels available for bars: y=18 to y=48 */
     for (uint8_t d = 0; d < STATS_DAYS; d++) {
         uint8_t bar_h = (uint8_t)(
             ((uint32_t)stats->daily_steps[d] * max_bar_h) / max_steps);
         uint8_t bx  = (uint8_t)(3 + d * 18);
-        uint8_t by  = (uint8_t)(10 + max_bar_h - bar_h);
+        uint8_t by  = (uint8_t)(18 + max_bar_h - bar_h);
         /* Highlight today */
         bool is_today = (d == stats->day_index);
         if (bar_h > 0u)
             OLED_FillRect(bx, by, 14, bar_h, 1);
         if (is_today)
-            OLED_DrawRect(bx, (uint8_t)(10), 14, max_bar_h, 1); /* outline today */
+            OLED_DrawRect(bx, (uint8_t)(18), 14, max_bar_h, 1); /* outline today */
         OLED_DrawStr(bx, 51, DAY_ABBR[d], OLED_FONT_6x8, 1);
     }
     /* Baseline */
@@ -849,8 +791,9 @@ void OLED_PageSettings(uint8_t cursor, bool bt_en,
                         bool raise_wake, bool fall_det, uint8_t brightness)
 {
     SH1106_Clear();
-    OLED_DrawStr(22, 0, "SETTINGS", OLED_FONT_6x8, 1);
-    OLED_DrawLine(0, 9, 127, 9, 1);
+    OLED_DrawBitmap(0, 0, 16, 16, MICON_SETTINGS);
+    OLED_DrawStr(19, 4, "SETTINGS", OLED_FONT_6x8, 1);
+    OLED_DrawLine(0, 17, 127, 17, 1);
 
     struct { const char *label; bool toggle; bool has_bool; } items[4] = {
         { "Brightness", false, false },
@@ -860,7 +803,7 @@ void OLED_PageSettings(uint8_t cursor, bool bt_en,
     };
 
     for (uint8_t i = 0; i < 4u; i++) {
-        uint8_t y = (uint8_t)(12 + i * 13);
+        uint8_t y = (uint8_t)(20 + i * 11);
         bool sel = (i == cursor);
         if (sel) {
             OLED_FillRect(0, (uint8_t)(y - 1), 128, 11, 1);

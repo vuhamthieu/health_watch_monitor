@@ -139,9 +139,6 @@ void OLED_PageHRMeasure(MeasPhase_t phase, uint8_t progress,
 void OLED_PageSpO2Measure(MeasPhase_t phase, uint8_t progress,
                           uint8_t spo2_result);
 
-/* EEG placeholder */
-void OLED_PageEEG(void);
-
 /* Workout screen */
 void OLED_PageWorkout(WorkoutMode_t mode, bool active,
                       uint32_t reps, uint32_t elapsed_s);

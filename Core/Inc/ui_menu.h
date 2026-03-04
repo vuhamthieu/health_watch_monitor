@@ -5,11 +5,10 @@
  *     → SELECT → SCREEN_MENU (scrollable list)
  *         [0] Heart Rate     → SCREEN_HR_MEASURE
  *         [1] SpO2           → SCREEN_SPO2_MEASURE
- *         [2] EEG            → SCREEN_EEG (placeholder)
- *         [3] Workout        → SCREEN_WORKOUT
- *         [4] Stopwatch      → SCREEN_STOPWATCH
- *         [5] Statistics     → SCREEN_STATS
- *         [6] Settings       → SCREEN_SETTINGS
+ *         [2] Workout        → SCREEN_WORKOUT
+ *         [3] Stopwatch      → SCREEN_STOPWATCH
+ *         [4] Statistics     → SCREEN_STATS
+ *         [5] Settings       → SCREEN_SETTINGS
  *     BACK (5 s on home)     → SCREEN_POWER_MENU
  */
 
@@ -33,7 +32,6 @@ typedef enum {
     SCREEN_MENU,            /* main scrollable menu                          */
     SCREEN_HR_MEASURE,      /* beating heart + progress ring                 */
     SCREEN_SPO2_MEASURE,    /* SpO2 measurement                              */
-    SCREEN_EEG,             /* placeholder                                   */
     SCREEN_WORKOUT,         /* walk / run / push-up mode                     */
     SCREEN_STOPWATCH,       /* stopwatch                                     */
     SCREEN_STATS,           /* 7-day bar chart                               */
@@ -45,7 +43,7 @@ typedef enum {
 /* ========================================================================== *
  *  Menu / settings items
  * ========================================================================== */
-#define MENU_ITEM_COUNT     7u
+#define MENU_ITEM_COUNT     6u
 
 typedef enum {
     SETTING_BRIGHTNESS = 0,
