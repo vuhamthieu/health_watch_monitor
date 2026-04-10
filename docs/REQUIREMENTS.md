@@ -101,6 +101,9 @@ Clock:
 | F1.7 | Show "---" for any metric with invalid/no-sensor reading |
 | F1.8 | Display auto-dims after configurable idle timeout |
 | F1.9 | Sleep screen: blank or minimal animation (power saving) |
+| F1.10 | Provide a dedicated Connect screen showing device name, connection state, and pairing PIN |
+| F1.11 | After HR/SpO2 measurement completes, Home shows the last completed result until a newer valid live value is available |
+| F1.12 | Home Bluetooth icon is shown only when Bluetooth setting is ON |
 
 ### F2 — Heart Rate Monitoring (MAX30102)
 
@@ -133,6 +136,12 @@ Clock:
 | F4.4 | Daily step goal indicator (default: 10,000 steps) |
 | F4.5 | Estimate distance: steps × avg_stride_length (default 0.75 m) |
 | F4.6 | Estimate calories: steps × 0.04 kcal (configurable) |
+| F4.7 | Workout walking/running counters are session-specific and independent from Home daily steps |
+
+### F4.8 — Push-up Counting (Implemented)
+
+- Push-up mode counts reps from MPU6050 acceleration pattern (peak + release) with minimum-interval debounce.
+- Push-up reps are tracked per workout session and reset when a new push-up workout starts.
 
 ### F5 — Activity Detection (MPU-6050)
 
@@ -141,6 +150,23 @@ Clock:
 | F5.1 | Classify: STATIONARY, WALKING, RUNNING based on acc magnitude |
 | F5.2 | Detect wrist-raise gesture → wake display from sleep |
 | F5.3 | Motion threshold for wake: configurable in `app_config.h` |
+
+### F5.4 — Raise-to-Wake (Implemented)
+
+- Setting toggle `RaiseWake` is now wired to runtime behavior.
+- When display is in sleep state and `RaiseWake` is ON, firmware detects wrist-raise motion and posts a wake event.
+- Detection uses acceleration-magnitude change plus wrist orientation guard (`accel_y`) with debounce count (`MPU6050_WAKE_COUNT`).
+- Sensitivity tuned for real wrist use: lower motion delta threshold, multi-axis orientation acceptance (`|Y|` or `|Z|`), and hysteresis counter decay to avoid missing quick raises.
+
+### F5.5 — Fall Detection (Implemented, conservative)
+
+- Setting toggle `FallDetect` is now wired to runtime behavior.
+- Fall event requires all phases in sequence to reduce false positives:
+  1. free-fall phase (`|a| < 0.45g`)
+  2. impact phase (`|a| > 2.2g`) within `900ms`
+  3. post-impact stillness near `1g` for `1200ms`
+- Includes cooldown between events to avoid repeated triggers from one incident.
+- On detected fall, firmware latches motion fall status (`fall_detected`, `last_fall_tick`) and wakes display.
 
 ### F6 — Bluetooth (JDY-31 SPP)
 
@@ -153,6 +179,8 @@ Clock:
 | F6.5 | BT connection status: CONNECTED / DISCONNECTED icon on OLED |
 | F6.6 | Buffer last 10 data points when disconnected; flush on reconnect |
 | F6.7 | Handle UART RX overrun and framing errors gracefully |
+| F6.8 | Connect screen pairing action is available only when Bluetooth setting is ON |
+| F6.9 | Display pairing PIN (`1234`) on Connect screen when Bluetooth setting is ON |
 
 ### F7 — Power Management
 
@@ -178,6 +206,18 @@ Clock:
 | F8.6 | Any button press wakes device from sleep/dim state |
 | F8.7 | Button debounce time: 20 ms |
 | F8.8 | Auto-repeat for UP/DOWN when held: after 500 ms hold, repeat every 150 ms |
+
+---
+
+## 8.3 Statistics UX (Updated)
+
+- Replaced day-based bar chart with rolling trend line charts (no RTC dependency).
+- Statistics screen now supports `UP/DOWN` view switching:
+  - `HR` (BPM)
+  - `SpO2` (%)
+  - `WALK` (walking activity intensity, steps/min)
+  - `RUN` (running activity intensity, steps/min)
+- Trend data is sampled continuously in firmware and stored in a fixed rolling buffer.
 
 ---
 
@@ -247,6 +287,46 @@ Responses:
   OK\r\n
   ERR:<reason>\r\n
 ```
+
+---
+
+## 8.1 Connect Screen UX (Implemented)
+
+- Menu now includes `Connect` entry.
+- Connect screen shows:
+  - Device name (`HealthWatch`)
+  - Current link state (`LINKED` / `READY`)
+  - Pairing PIN (`1234`)
+- If Bluetooth is OFF in Settings:
+  - Pairing UI is disabled
+  - Screen shows `Bluetooth is OFF` and `Enable in Settings`
+- `LINKED` means UART data link has activity (RX observed), not just OS-level pairing.
+- `READY` means module is enabled and pairable; open phone terminal app and send command to activate data link.
+
+### UART debug note
+- USART1 is shared with JDY-31. To avoid corrupting BLE traffic, `printf` retarget is disabled by default via `APP_ENABLE_UART_DEBUG = 0` in `app_config.h`.
+- If you turn it on, debug text and BLE payload share the same serial line.
+
+---
+
+## 8.2 Startup Diagnostics (Implemented)
+
+- Boot now prints I2C scan results for expected devices:
+  - OLED `0x3C`
+  - MAX30102 `0x57`
+  - MPU6050 `0x68/0x69`
+- Boot runs OLED self-test sequence (`full white` then `clear`).
+- I2C bus speed is set to `100 kHz` for better wiring tolerance.
+- BLE periodic `HW:...` packet output is sent only when BT link is connected.
+- Temporary display diagnostic mode is enabled: `POWER_DISABLE_AUTO_SLEEP = 1`, so OLED will not auto-dim/sleep during debug.
+- SH1106 driver now auto-detects OLED address on boot (`0x3C` or `0x3D`) to handle SA0 wiring differences.
+
+### Sensor acquisition defaults (Updated)
+
+- MAX30102 runtime defaults were restored to improve measurement reliability:
+  - sample rate: `100 sps`
+  - LED drive: `0x3F` (Red + IR)
+- `sensorTask` priority restored to `AboveNormal` to reduce timing jitter during FIFO reads.
 
 ---
 

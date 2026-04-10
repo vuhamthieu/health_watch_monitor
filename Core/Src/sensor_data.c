@@ -8,9 +8,8 @@
 
 /* IPC handles */
 osMutexId    xSensorDataMutex;
-osMessageQId xButtonEventQueue;
+QueueHandle_t xButtonEventQueue;
 osMessageQId xBleQueue;
-osMessageQId xPowerEventQueue;
 
 SharedData_t gSharedData;
 
@@ -24,26 +23,28 @@ void Sensor_Data_Init(void)
     gSharedData.heart.hr_status   = SENSOR_INIT;
     gSharedData.heart.spo2_status = SENSOR_INIT;
     gSharedData.motion.status     = SENSOR_INIT;
+    gSharedData.motion.fall_detected = false;
+    gSharedData.motion.last_fall_tick = 0u;
+    gSharedData.settings.bluetooth_enabled = true;
+    gSharedData.settings.raise_to_wake = false;
+    gSharedData.settings.fall_detect = false;
+    gSharedData.settings.ppg_force_active = false;
+    gSharedData.ble.enabled       = true;
+    gSharedData.workout.active = false;
+    gSharedData.workout.mode = 0u;
+    gSharedData.workout.start_total_steps = 0u;
+    gSharedData.workout.session_steps = 0u;
+    gSharedData.workout.pushup_reps = 0u;
     gSharedData.battery.bars      = BATT_BARS_FULL;
     gSharedData.battery.charge    = BATT_UNKNOWN;
 
     /* Create FreeRTOS objects */
     osMutexDef(SensorDataMutex);
     xSensorDataMutex = osMutexCreate(osMutex(SensorDataMutex));
-
-    /* TODO: Use the queue sizes that fit your usage pattern.
-     *       ButtonEvent_t  = ~16 bytes
-     *       BlePacket_t    = ~12 bytes
-     *       PowerEvent_t   = 4 bytes
-     */
-    osMessageQDef(ButtonEventQueue, 8, ButtonEvent_t);
-    xButtonEventQueue = osMessageCreate(osMessageQ(ButtonEventQueue), NULL);
+    xButtonEventQueue = xQueueCreate(8u, sizeof(ButtonEvent_t));
 
     osMessageQDef(BleQueue, 16, BlePacket_t);
     xBleQueue = osMessageCreate(osMessageQ(BleQueue), NULL);
-
-    osMessageQDef(PowerEventQueue, 4, PowerEvent_t);
-    xPowerEventQueue = osMessageCreate(osMessageQ(PowerEventQueue), NULL);
 }
 
 /* heart data get/set - all mutex protected */

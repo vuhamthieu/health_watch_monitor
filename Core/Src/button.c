@@ -37,10 +37,7 @@ static void post_event(ButtonId_t id, ButtonEventType_t type, uint32_t hold_ms)
         .hold_ms = hold_ms,
         .tick    = osKernelSysTick(),
     };
-    osMessagePut(xButtonEventQueue, *(uint32_t *)&evt, 0);
-    /* NOTE: osMessagePut stores a 32-bit value; for larger structs use a
-     * pointer queue or a mailbox.  Update this when implementing. */
-    /* TODO: switch to a proper queue of ButtonEvent_t structs */
+    (void)xQueueSend(xButtonEventQueue, &evt, 0u);
 }
 
 void Button_Task(void const *argument)

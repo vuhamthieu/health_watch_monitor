@@ -13,6 +13,7 @@
 
 #include "max30102.h"
 #include "cmsis_os.h"
+#include <stdio.h>
 #include <string.h>
 
 /* ========================================================================== *
@@ -74,8 +75,9 @@ MAX30102_Status_t MAX30102_Init(void)
     /* Software reset */
     MAX30102_Reset();
 
-    /* FIFO configuration: 4-sample average, FIFO rollover disabled, almost-full=17 */
-    reg_write(MAX30102_REG_FIFO_CONFIG, 0x4F);
+    /* FIFO configuration: no averaging, rollover ENABLED (wr wraps past rd),
+     * almost-full=15. Without rollover, wr wraps to rd making FIFO look empty. */
+    reg_write(MAX30102_REG_FIFO_CONFIG, 0x1F);
 
     /* Mode: SpO2 (Red + IR) */
     reg_write(MAX30102_REG_MODE_CONFIG, (uint8_t)MAX30102_MODE_SPO2);
@@ -83,11 +85,11 @@ MAX30102_Status_t MAX30102_Init(void)
     /* SpO2: ADC range 4096nA, 100 sps, 411µs pulse width (18-bit) */
     reg_write(MAX30102_REG_SPO2_CONFIG,
               (0x02 << 5) |                          /* ADC range: 4096 nA */
-              ((uint8_t)MAX30102_SR_100 << 2) |
+              ((uint8_t)MAX30102_SR_100 << 2) |     /* 100 sps */
               (uint8_t)MAX30102_PW_411);
 
-    /* LED currents: ~7 mA each (0x24 ≈ 7.2 mA) */
-    MAX30102_SetLEDCurrent(0x24, 0x24);
+    /* LED currents: 0.2 mA/LSB. Use ~12 mA baseline for wrist modules. */
+    MAX30102_SetLEDCurrent(0x3F, 0x3F);
 
     /* Clear FIFO */
     MAX30102_FlushFIFO();
@@ -135,29 +137,67 @@ MAX30102_Status_t MAX30102_ReadFIFO(MAX30102_Sample_t *buf,
                                     uint8_t max_count,
                                     uint8_t *read_count)
 {
-    uint8_t wr_ptr = 0, rd_ptr = 0;
+    uint8_t wr_ptr = 0, rd_ptr = 0, ovf = 0;
     *read_count = 0;
 
     if (reg_read(MAX30102_REG_FIFO_WR_PTR, &wr_ptr, 1) != HAL_OK) return MAX30102_ERR_I2C;
     if (reg_read(MAX30102_REG_FIFO_RD_PTR, &rd_ptr, 1) != HAL_OK) return MAX30102_ERR_I2C;
+    if (reg_read(MAX30102_REG_OVF_COUNTER, &ovf,    1) != HAL_OK) return MAX30102_ERR_I2C;
 
-    uint8_t available = (uint8_t)((wr_ptr - rd_ptr + 32) % 32);
-    uint8_t to_read   = (available < max_count) ? available : max_count;
+    /* Clear overflow flag — but DON'T bail out. Read whatever is available now.
+     * The old logic of setting rd=wr on OVF caused an infinite 0-read loop:
+     * the main loop is too slow to outrun overflow, so it was always OVF → always 0. */
+    if (ovf > 0) {
+        reg_write(MAX30102_REG_OVF_COUNTER, 0);
+    }
+
+    int avail = (int)wr_ptr - (int)rd_ptr;
+    if (avail < 0) avail += 32;
+
+    if (avail == 0) {
+        *read_count = 0;
+        return MAX30102_OK;
+    }
+
+    uint8_t to_read = ((uint8_t)avail < max_count) ? (uint8_t)avail : max_count;
+
+    /* Single burst read: one I2C transaction for all samples.
+     * Sequential reads of the FIFO_DATA register auto-increment the read pointer
+     * on the chip side — each 6-byte block is one sample (3 bytes Red, 3 bytes IR). */
+    uint8_t temp_buf[16 * 6]; /* max_count capped at 16 by caller */
+    if (HAL_I2C_Mem_Read(&APP_I2C_HANDLE, MAX30102_I2C_ADDR,
+                         MAX30102_REG_FIFO_DATA, I2C_MEMADD_SIZE_8BIT,
+                         temp_buf, (uint16_t)(to_read * 6u),
+                         I2C_TIMEOUT_MS) != HAL_OK) {
+        return MAX30102_ERR_I2C;
+    }
 
     for (uint8_t i = 0; i < to_read; i++) {
-        uint8_t raw[6];
-        if (reg_read(MAX30102_REG_FIFO_DATA, raw, 6) != HAL_OK) return MAX30102_ERR_I2C;
-
-        buf[i].red = ((uint32_t)(raw[0] & 0x03) << 16) |
-                     ((uint32_t)raw[1] << 8) |
-                     raw[2];
-        buf[i].ir  = ((uint32_t)(raw[3] & 0x03) << 16) |
-                     ((uint32_t)raw[4] << 8) |
-                     raw[5];
+        buf[i].red = ((uint32_t)(temp_buf[i*6u + 0u] & 0x03u) << 16) |
+                     ((uint32_t) temp_buf[i*6u + 1u]           <<  8) |
+                      (uint32_t) temp_buf[i*6u + 2u];
+        buf[i].ir  = ((uint32_t)(temp_buf[i*6u + 3u] & 0x03u) << 16) |
+                     ((uint32_t) temp_buf[i*6u + 4u]           <<  8) |
+                      (uint32_t) temp_buf[i*6u + 5u];
     }
 
     *read_count = to_read;
     return MAX30102_OK;
+}
+
+void MAX30102_DumpRegs(void)
+{
+    uint8_t mode = 0, spo2 = 0, led1 = 0, led2 = 0, wr = 0, rd = 0, ovf = 0;
+    reg_read(MAX30102_REG_MODE_CONFIG,  &mode, 1);
+    reg_read(MAX30102_REG_SPO2_CONFIG,  &spo2, 1);
+    reg_read(MAX30102_REG_LED1_PA,      &led1, 1);
+    reg_read(MAX30102_REG_LED2_PA,      &led2, 1);
+    reg_read(MAX30102_REG_FIFO_WR_PTR,  &wr,   1);
+    reg_read(MAX30102_REG_FIFO_RD_PTR,  &rd,   1);
+    reg_read(MAX30102_REG_OVF_COUNTER,  &ovf,  1);
+    printf("[MAX-DBG] mode=0x%02X spo2cfg=0x%02X led1=0x%02X led2=0x%02X "
+           "wr=%u rd=%u ovf=%u\r\n",
+           mode, spo2, led1, led2, wr, rd, ovf);
 }
 
 MAX30102_Status_t MAX30102_FlushFIFO(void)

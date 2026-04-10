@@ -9,9 +9,9 @@
  *                    sensor polling rate reduced.
  *
  * Wake triggers:
- *   - Any button press (via xButtonEventQueue / xPowerEventQueue)
- *   - Wrist-raise gesture (MPU-6050, via xPowerEventQueue)
- *   - BT incoming data (via xPowerEventQueue)
+ *   - Any button press (via Power_PostEvent task notification)
+ *   - Wrist-raise gesture (MPU-6050, via Power_PostEvent)
+ *   - BT incoming data (via Power_PostEvent)
  *
  * BACK long-press → sends POWER_EVT_SLEEP_MENU to self to show sleep overlay.
  */
@@ -37,7 +37,7 @@ typedef enum {
 } PowerState_t;
 
 /* ========================================================================== *
- *  Power events (placed in xPowerEventQueue)
+ *  Power events (sent to powerTask via task notifications)
  * ========================================================================== */
 typedef enum {
     POWER_EVT_USER_ACTIVITY = 0,  /**< Any button press / touch             */

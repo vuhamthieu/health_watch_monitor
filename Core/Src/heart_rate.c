@@ -29,6 +29,7 @@ static uint8_t  s_bpm_count  = 0;
 static uint16_t s_bpm_output = 0;
 
 static bool     s_finger_present = false;
+static uint32_t s_last_ir        = 0;
 
 void HR_Reset(void)
 {
@@ -50,6 +51,7 @@ void HR_Reset(void)
 
 void HR_AddSample(uint32_t ir_sample)
 {
+    s_last_ir = ir_sample;
     s_ir_buf[s_buf_head] = ir_sample;
     s_buf_head = (s_buf_head + 1) % HR_BUFFER_SIZE;
     s_sample_count++;
@@ -108,6 +110,11 @@ bool HR_GetBPM(uint16_t *bpm_out)
 bool HR_FingerPresent(void)
 {
     return s_finger_present;
+}
+
+uint32_t HR_GetLastIR(void)
+{
+    return s_last_ir;
 }
 
 void HR_GetAlertStatus(bool *is_tachy, bool *is_brady)

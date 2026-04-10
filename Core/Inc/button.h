@@ -9,7 +9,7 @@
  *   BTN_SELECT → PA15 (polled)
  *
  * buttonTask polls every BTN_DEBOUNCE_MS and pushes ButtonEvent_t items
- * into xButtonEventQueue for uiTask and powerTask to consume.
+ * into xButtonEventQueue for uiTask to consume.
  */
 
 #ifndef __BUTTON_H

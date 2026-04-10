@@ -107,6 +107,7 @@ MAX30102_Status_t MAX30102_FlushFIFO(void);
  * @param  ir_pa    IR LED current.
  */
 MAX30102_Status_t MAX30102_SetLEDCurrent(uint8_t red_pa, uint8_t ir_pa);
+void              MAX30102_DumpRegs(void);  /**< Print key registers via printf (debug) */
 
 /**
  * @brief  Enter/exit low-power shutdown mode (LEDs off, I2C stays alive).

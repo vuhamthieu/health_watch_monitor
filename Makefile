@@ -74,6 +74,9 @@ C_SOURCES += assets/icons/generated/micon_workout.c
 C_SOURCES += assets/icons/generated/micon_stopwatch.c
 C_SOURCES += assets/icons/generated/micon_stats.c
 C_SOURCES += assets/icons/generated/micon_settings.c
+C_SOURCES += assets/icons/generated/micon_connect.c
+C_SOURCES += assets/icons/generated/micon_running.c
+C_SOURCES += assets/icons/generated/micon_walking.c
 
 ######################################
 # Assembly Sources

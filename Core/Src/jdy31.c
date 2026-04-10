@@ -65,8 +65,10 @@ JDY31_Status_t JDY31_Init(void)
  * ========================================================================== */
 bool JDY31_IsConnected(void)
 {
-    /* TODO: If you wire the JDY-31 STATE pin to a GPIO, read it directly.
-     * For now, assume connected if we received data in the last 10 seconds. */
+    uint32_t now = osKernelSysTick();
+    if (s_connected && ((now - s_last_rx_tick) > 10000u)) {
+        s_connected = false;
+    }
     return s_connected;
 }
 
@@ -111,7 +113,7 @@ void JDY31_RxCallback(uint8_t byte)
     uint16_t next = (s_rx_head + 1) % BLE_RX_BUF_SIZE;
     if (next != s_rx_tail) {   /* not full */
         s_rx_buf[s_rx_head] = byte;
-        s_rx_head = next;
+        s_rx_head = next;   
     }
     s_last_rx_tick = osKernelSysTick();
     s_connected = true; /* If we're receiving, we're connected */

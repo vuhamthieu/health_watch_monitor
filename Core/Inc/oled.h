@@ -126,7 +126,8 @@ void OLED_DrawBatteryIcon(uint8_t x, uint8_t y, uint8_t bars,
 
 /* Retro homescreen */
 void OLED_PageHome(const SoftClock_t *clk, const BatteryStatus_t *bat,
-                   bool bt_enabled, bool bt_connected);
+                   bool bt_enabled, bool bt_connected,
+                   uint32_t steps, uint8_t hr_bpm, uint8_t spo2_pct);
 
 /* Scrollable main menu */
 void OLED_PageMenu(uint8_t cursor, uint8_t scroll_offset);
@@ -140,18 +141,23 @@ void OLED_PageSpO2Measure(MeasPhase_t phase, uint8_t progress,
                           uint8_t spo2_result);
 
 /* Workout screen */
+void OLED_PageWorkoutMenu(uint8_t cursor);
 void OLED_PageWorkout(WorkoutMode_t mode, bool active,
-                      uint32_t reps, uint32_t elapsed_s);
+                      uint32_t reps, uint32_t elapsed_s, uint8_t hr_bpm);
+void OLED_PageWorkoutConfirm(uint8_t cursor);
 
 /* Stopwatch */
 void OLED_PageStopwatch(uint32_t elapsed_ms, bool running);
 
-/* 7-day bar chart statistics */
-void OLED_PageStats(const WeekStats_t *stats);
+/* Rolling trend statistics */
+void OLED_PageStats(const WeekStats_t *stats, uint8_t view_cursor);
 
 /* Settings list */
 void OLED_PageSettings(uint8_t cursor, bool bt_en,
                        bool raise_wake, bool fall_det, uint8_t brightness);
+
+/* Bluetooth connect / pairing helper */
+void OLED_PageConnect(bool bt_enabled, bool bt_connected);
 
 /* Power/sleep menu */
 void OLED_PagePowerMenu(uint8_t cursor);

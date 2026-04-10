@@ -94,6 +94,16 @@ MPU6050_Status_t MPU6050_SetLowPower(bool enable);
  */
 bool MPU6050_IsConnected(void);
 
+/**
+ * @brief  Return the 7-bit I2C address that was detected at init (0x68 or 0x69).
+ */
+uint8_t MPU6050_GetAddr(void);
+
+/**
+ * @brief  Return the WHO_AM_I byte read during init.
+ */
+uint8_t MPU6050_GetWhoAmI(void);
+
 #ifdef __cplusplus
 }
 #endif

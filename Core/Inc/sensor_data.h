@@ -19,6 +19,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 #include "cmsis_os.h"
+#include "queue.h"
 #include "app_config.h"
 
 /* ========================================================================== *
@@ -67,6 +68,8 @@ typedef struct {
     float           distance_m;     /**< Estimated distance in metres        */
     float           calories_kcal;  /**< Estimated calories                  */
     ActivityState_t activity;
+    bool            fall_detected;   /**< latched true when fall is detected      */
+    uint32_t        last_fall_tick;  /**< tick when fall was detected             */
     SensorStatus_t  status;
     uint32_t        last_update_tick;
 } MotionData_t;
@@ -108,20 +111,51 @@ typedef struct {
  *  7-day statistics (ring buffer, resets every Monday)
  * ========================================================================== */
 #include "app_config.h"
+#define STATS_TREND_POINTS 48u   /**< rolling points for on-device trend charts */
 typedef struct {
     uint32_t  daily_steps[STATS_DAYS];  /**< Steps per day [0]=oldest        */
     uint16_t  daily_hr_avg[STATS_DAYS]; /**< Avg BPM per day                 */
     uint8_t   day_index;                /**< Current day slot (0–6)          */
     uint8_t   days_recorded;            /**< How many days have valid data    */
+
+    /* Rolling trend since boot (no RTC dependency) */
+    uint8_t   trend_hr[STATS_TREND_POINTS];
+    uint8_t   trend_spo2[STATS_TREND_POINTS];
+    uint8_t   trend_walk[STATS_TREND_POINTS];  /**< walking cadence-ish steps/min */
+    uint8_t   trend_run[STATS_TREND_POINTS];   /**< running cadence-ish steps/min */
+    uint8_t   trend_head;                      /**< next write index               */
+    uint8_t   trend_count;                     /**< valid points                   */
 } WeekStats_t;
 
 /* ========================================================================== *
  *  Bluetooth / connectivity status
  * ========================================================================== */
 typedef struct {
+    bool    enabled;        /**< Bluetooth feature enabled from settings      */
     bool    connected;      /**< JDY-31 connection state                     */
     uint8_t buffered_count; /**< Packets buffered while disconnected         */
 } BleStatus_t;
+
+/* ========================================================================== *
+ *  Workout session (separate from daily home steps)
+ * ========================================================================== */
+typedef struct {
+    bool     active;
+    uint8_t  mode;               /**< 0=walking,1=running,2=pushups */
+    uint32_t start_total_steps;  /**< daily step snapshot at start   */
+    uint32_t session_steps;      /**< walk/run steps in this session */
+    uint32_t pushup_reps;        /**< push-up reps in this session   */
+} WorkoutSession_t;
+
+/* ========================================================================== *
+ *  User settings (shared across tasks)
+ * ========================================================================== */
+typedef struct {
+    bool bluetooth_enabled;
+    bool raise_to_wake;
+    bool fall_detect;
+    bool ppg_force_active;  /**< force PPG active while HR/SpO2 UI screens are open */
+} UserSettings_t;
 
 /* ========================================================================== *
  *  Master shared data block
@@ -130,7 +164,9 @@ typedef struct {
     HeartData_t     heart;
     MotionData_t    motion;
     SoftClock_t     clock;
+    UserSettings_t  settings;
     BleStatus_t     ble;
+    WorkoutSession_t workout;
     BatteryStatus_t battery;
     StopwatchData_t stopwatch;
     WeekStats_t     stats;
@@ -147,14 +183,11 @@ extern osMutexId xSensorDataMutex;
 /** Mutex protecting the shared I2C1 bus (MPU-6050 + MAX30102) */
 extern osMutexId i2cMutexHandle;
 
-/** Queue: buttonTask → uiTask, powerTask.  Item = ButtonEvent_t (button.h) */
-extern osMessageQId xButtonEventQueue;
+/** Queue: buttonTask → uiTask.  Item = ButtonEvent_t (button.h) */
+extern QueueHandle_t xButtonEventQueue;
 
 /** Queue: sensorTask → bleTask.  Item = BlePacket_t (jdy31.h) */
 extern osMessageQId xBleQueue;
-
-/** Queue: buttonTask / sensorTask → powerTask.  Item = PowerEvent_t (power_manager.h) */
-extern osMessageQId xPowerEventQueue;
 
 /* ========================================================================== *
  *  Global data instance (lock with xSensorDataMutex before access)

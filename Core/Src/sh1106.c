@@ -6,6 +6,7 @@
 #include <string.h>
 
 static uint8_t s_framebuf[SH1106_BUF_SIZE];
+static uint16_t s_oled_addr = OLED_I2C_ADDR;
 
 static const uint8_t SH1106_INIT_CMDS[] = {
     0xAE,
@@ -29,7 +30,7 @@ SH1106_Status_t SH1106_WriteCmd(uint8_t cmd)
 {
     uint8_t buf[2] = { 0x00, cmd }; /* Co=0, D/C#=0 → command byte */
     HAL_StatusTypeDef ret = HAL_I2C_Master_Transmit(
-        &APP_I2C_HANDLE, OLED_I2C_ADDR, buf, 2, I2C_TIMEOUT_MS);
+        &APP_I2C_HANDLE, s_oled_addr, buf, 2, I2C_TIMEOUT_MS);
     return (ret == HAL_OK) ? SH1106_OK : SH1106_ERROR;
 }
 
@@ -38,13 +39,21 @@ SH1106_Status_t SH1106_WriteData(const uint8_t *data, uint16_t len)
     /* Co=0, D/C#=1 → data stream */
     uint8_t ctrl = 0x40;
     HAL_StatusTypeDef ret = HAL_I2C_Mem_Write(
-        &APP_I2C_HANDLE, OLED_I2C_ADDR, ctrl,
+        &APP_I2C_HANDLE, s_oled_addr, ctrl,
         I2C_MEMADD_SIZE_8BIT, (uint8_t *)data, len, I2C_TIMEOUT_MS);
     return (ret == HAL_OK) ? SH1106_OK : SH1106_ERROR;
 }
 
 SH1106_Status_t SH1106_Init(void)
 {
+    if (HAL_I2C_IsDeviceReady(&APP_I2C_HANDLE, (uint16_t)(0x3C << 1), 2u, I2C_TIMEOUT_MS) == HAL_OK) {
+        s_oled_addr = (uint16_t)(0x3C << 1);
+    } else if (HAL_I2C_IsDeviceReady(&APP_I2C_HANDLE, (uint16_t)(0x3D << 1), 2u, I2C_TIMEOUT_MS) == HAL_OK) {
+        s_oled_addr = (uint16_t)(0x3D << 1);
+    } else {
+        s_oled_addr = OLED_I2C_ADDR;
+    }
+
     for (uint8_t i = 0; i < sizeof(SH1106_INIT_CMDS); i++) {
         if (SH1106_WriteCmd(SH1106_INIT_CMDS[i]) != SH1106_OK) {
             return SH1106_ERROR;
@@ -128,13 +137,20 @@ SH1106_Status_t SH1106_FlushPage(uint8_t page)
 
 void SH1106_SetDisplayOn(bool on)
 {
+    /* Acquire the shared I2C mutex so this doesn't race with SH1106_Flush. */
+    bool held = (i2cMutexHandle != NULL);
+    if (held) osMutexWait(i2cMutexHandle, osWaitForever);
     SH1106_WriteCmd(on ? 0xAF : 0xAE);
+    if (held) osMutexRelease(i2cMutexHandle);
 }
 
 void SH1106_SetContrast(uint8_t contrast)
 {
+    bool held = (i2cMutexHandle != NULL);
+    if (held) osMutexWait(i2cMutexHandle, osWaitForever);
     SH1106_WriteCmd(0x81);
     SH1106_WriteCmd(contrast);
+    if (held) osMutexRelease(i2cMutexHandle);
 }
 
 void SH1106_SetInvert(bool invert)

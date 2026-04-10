@@ -59,7 +59,8 @@ bool HR_GetBPM(uint16_t *bpm_out);
 /**
  * @brief  Check if a finger is present based on recent IR signal level.
  */
-bool HR_FingerPresent(void);
+bool     HR_FingerPresent(void);
+uint32_t HR_GetLastIR(void);       /**< Last raw IR sample (debug)    */
 
 /**
  * @brief  Check if heart rate is in alert zone (tachy or brady).

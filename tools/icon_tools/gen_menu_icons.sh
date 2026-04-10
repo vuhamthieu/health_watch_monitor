@@ -25,5 +25,8 @@ gen workout.png    MICON_WORKOUT    micon_workout
 gen stopwatch.png  MICON_STOPWATCH  micon_stopwatch
 gen stats.png      MICON_STATS      micon_stats
 gen settings.png   MICON_SETTINGS   micon_settings
+gen running.png    MICON_RUNNING    micon_running
+gen walking.png    MICON_WALKING    micon_walking
+gen connectdevice.png    MICON_CONNECT    micon_connect
 
 echo "Generated icons in: $OUT_DIR"

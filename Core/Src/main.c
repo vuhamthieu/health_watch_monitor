@@ -1,6 +1,7 @@
 /* main.c — FreeRTOS task startup, peripheral init, battery reading */
 #include "main.h"
 #include "cmsis_os.h"
+#include "task.h"
 
 #include "sensor_data.h"
 #include "button.h"
@@ -13,12 +14,16 @@
 #include "spo2.h"
 #include "step_counter.h"
 #include "app_config.h"
+#include "oled.h"
+#include "sh1106.h"
 #include <stdio.h>
 
 /* Retarget printf → UART1 (PA9=TX, 9600 baud) — connect CH340 RX to PA9 */
 int __io_putchar(int ch)
 {
+#if APP_ENABLE_UART_DEBUG
     HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 10);
+#endif
     return ch;
 }
 
@@ -58,6 +63,9 @@ void StartTask06(void const * argument);
 static void     Batt_VREF_ADC_Init(void);
 static uint8_t  Batt_VREF_ReadBars(void);
 static BattChargeState_t Batt_TP4057_ReadCharge(void);
+static void     Boot_I2C_Scan(void);
+static void     Boot_OLED_SelfTest(void);
+static void     Debug_LogTaskStackWatermarks(void);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
@@ -115,6 +123,64 @@ static BattChargeState_t Batt_TP4057_ReadCharge(void)
     if (chrg)   return BATT_CHARGING;
     return BATT_DISCHARGING;
 }
+
+static void Boot_I2C_Scan(void)
+{
+  static const uint8_t expected[] = { 0x3C, 0x57, 0x68, 0x69 };
+  bool seen[4] = { false, false, false, false };
+
+  printf("[I2C] scan start\r\n");
+  for (uint8_t addr = 1u; addr < 128u; addr++) {
+    if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(addr << 1), 2u, 5u) == HAL_OK) {
+      printf("[I2C] found 0x%02X\r\n", (unsigned)addr);
+      for (uint8_t i = 0u; i < 4u; i++) {
+        if (addr == expected[i]) {
+          seen[i] = true;
+        }
+      }
+    }
+  }
+
+  printf("[I2C] OLED(0x3C): %s\r\n", seen[0] ? "OK" : "MISS");
+  printf("[I2C] MAX30102(0x57): %s\r\n", seen[1] ? "OK" : "MISS");
+  printf("[I2C] MPU6050(0x68/0x69): %s\r\n", (seen[2] || seen[3]) ? "OK" : "MISS");
+}
+
+static void Boot_OLED_SelfTest(void)
+{
+  if (SH1106_Init() != SH1106_OK) {
+    printf("[OLED] init fail\r\n");
+    return;
+  }
+
+  SH1106_Fill(1u);
+  SH1106_Flush();
+  HAL_Delay(180);
+  SH1106_Clear();
+  SH1106_Flush();
+  HAL_Delay(120);
+  printf("[OLED] self-test done\r\n");
+}
+
+static void Debug_LogTaskStackWatermarks(void)
+{
+#if APP_ENABLE_UART_DEBUG
+  const UBaseType_t min_words = uxTaskGetStackHighWaterMark(NULL);
+  const UBaseType_t ui_words = uxTaskGetStackHighWaterMark((TaskHandle_t)uiTaskHandle);
+  const UBaseType_t sensor_words = uxTaskGetStackHighWaterMark((TaskHandle_t)sensorTaskHandle);
+  const UBaseType_t ble_words = uxTaskGetStackHighWaterMark((TaskHandle_t)bleTaskHandle);
+  const UBaseType_t button_words = uxTaskGetStackHighWaterMark((TaskHandle_t)buttonTaskHandle);
+  const UBaseType_t power_words = uxTaskGetStackHighWaterMark((TaskHandle_t)powerTaskHandle);
+
+  printf("[STACK] default=%luB ui=%luB sensor=%luB ble=%luB button=%luB power=%luB\r\n",
+       (unsigned long)(min_words * sizeof(StackType_t)),
+       (unsigned long)(ui_words * sizeof(StackType_t)),
+       (unsigned long)(sensor_words * sizeof(StackType_t)),
+       (unsigned long)(ble_words * sizeof(StackType_t)),
+       (unsigned long)(button_words * sizeof(StackType_t)),
+       (unsigned long)(power_words * sizeof(StackType_t)));
+#endif
+}
 /* USER CODE END 0 */
 
 int main(void)
@@ -136,6 +202,8 @@ int main(void)
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  Boot_I2C_Scan();
+  Boot_OLED_SelfTest();
   Batt_VREF_ADC_Init();
   Sensor_Data_Init();
   /* USER CODE END 2 */
@@ -202,7 +270,7 @@ static void MX_I2C1_Init(void)
   /* USER CODE BEGIN I2C1_Init 1 */
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.ClockSpeed = 100000;  /* Standard mode — improves bus robustness */
   hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -301,6 +369,7 @@ void StartDefaultTask(void const * argument)
   (void)argument;
   uint8_t  half    = 0;
   uint16_t bat_cnt = 0;
+  uint8_t  stack_cnt = 0;
   for(;;)
   {
     LED_TOGGLE();
@@ -325,6 +394,11 @@ void StartDefaultTask(void const * argument)
           osMutexRelease(xSensorDataMutex);
         }
       }
+
+      if (++stack_cnt >= 10u) {
+        stack_cnt = 0;
+        Debug_LogTaskStackWatermarks();
+      }
     }
     osDelay(500);
   }
@@ -346,43 +420,84 @@ void StartTask03(void const * argument)
 {
   /* USER CODE BEGIN StartTask03 */
   (void)argument;
+  TickType_t last_wake = xTaskGetTickCount();
+  enum PPG_MODE_OFF;
+  enum PPG_MODE_PASSIVE;
+  enum PPG_MODE_ACTIVE;
 
-  /* Init sensors under I2C mutex */
+  /* Wait for UI task to finish OLED init and show splash */
+  osDelay(2000);
+
+  /* Init sensors — brief mutex grabs, no long holds */
   osMutexWait(i2cMutexHandle, osWaitForever);
   MPU6050_Status_t  mpu_status = MPU6050_Init();
+  osMutexRelease(i2cMutexHandle);
+
+  osDelay(5);
+
+  osMutexWait(i2cMutexHandle, osWaitForever);
   MAX30102_Status_t max_status = MAX30102_Init();
   if (max_status == MAX30102_OK) {
-      MAX30102_SetLEDCurrent(0x3F, 0x3F); /* ~12 mA — visible red glow */
       MAX30102_FlushFIFO();
   }
   osMutexRelease(i2cMutexHandle);
 
-  /* Report sensor init results over UART (connect CH340 to PA9 at 9600 baud) */
-  printf("[BOOT] MPU6050 init: %s\r\n",
-      mpu_status == MPU6050_OK        ? "OK" :
-      mpu_status == MPU6050_ERR_I2C   ? "ERR_I2C (check wiring/pullups)" :
-                                        "ERR_WHOAMI (wrong addr? AD0 pin?)");
-  printf("[BOOT] MAX30102 init: %s\r\n",
+  printf("[BOOT] MPU6050: %s (addr=0x%02X, whoami=0x%02X)\r\n",
+      mpu_status == MPU6050_OK      ? "OK" :
+      mpu_status == MPU6050_ERR_I2C ? "NOT FOUND on 0x68 or 0x69" : "ERR_WHOAMI",
+      (unsigned)MPU6050_GetAddr(),
+      (unsigned)MPU6050_GetWhoAmI());
+  printf("[BOOT] MAX30102: %s\r\n",
       max_status == MAX30102_OK         ? "OK" :
-      max_status == MAX30102_ERR_I2C    ? "ERR_I2C (check wiring/pullups)" :
-                                          "ERR_PARTID (chip not found)");
-
-  /* Calibrate MPU — device should be flat and still at boot */
-  if (mpu_status == MPU6050_OK) {
+      max_status == MAX30102_ERR_I2C    ? "NOT FOUND (check wiring)" : "ERR_PARTID");
+  if (max_status == MAX30102_OK) {
       osMutexWait(i2cMutexHandle, osWaitForever);
-      MPU6050_Calibrate();
+      MAX30102_DumpRegs(); /* print mode/LED/FIFO registers to verify config */
       osMutexRelease(i2cMutexHandle);
   }
+
+  /* Skip MPU calibration at boot — avoids holding I2C mutex for 1s.
+   * Small accel bias is acceptable for step counting. */
+
+  bool mpu_ok = (mpu_status == MPU6050_OK);
+  bool max_ok = (max_status == MAX30102_OK);
 
   HR_Reset();
   SpO2_Reset();
   StepCounter_Reset();
 
-  bool mpu_ok = (mpu_status == MPU6050_OK);
-  bool max_ok = (max_status == MAX30102_OK);
-  MAX30102_Sample_t fifo_buf[8];
-  uint8_t  fifo_cnt = 0;
-  uint32_t loop_cnt = 0u;
+  MAX30102_Sample_t fifo_buf[16];
+  uint8_t  fifo_cnt  = 0;
+  uint32_t loop_cnt  = 0u;
+  uint32_t max_empty = 0u; /* consecutive empty FIFO reads — triggers reinit */
+  uint32_t trend_tick = osKernelSysTick();
+  uint32_t trend_last_steps = 0u;
+
+  bool raise_wake_enabled = false;
+  bool fall_detect_enabled = false;
+  uint8_t wake_count = 0u;
+  float prev_accel_mag = 1.0f;
+
+  uint8_t fall_phase = 0u;      /* 0=idle, 1=freefall seen, 2=impact seen */
+  uint32_t freefall_tick = 0u;
+  uint32_t impact_tick = 0u;
+  uint32_t still_start_tick = 0u;
+  uint32_t last_fall_tick = 0u;
+  bool pushup_peak = false;
+  uint32_t last_pushup_tick = 0u;
+  typedef enum {
+    PPG_MODE_OFF = 0,
+    PPG_MODE_PASSIVE,
+    PPG_MODE_ACTIVE,
+  } PpgMode_t;
+
+  PpgMode_t ppg_mode = PPG_MODE_PASSIVE;
+  PpgMode_t ppg_prev_mode = PPG_MODE_OFF;
+  bool ppg_collect_enabled = false;
+  bool ppg_workout_active = false;
+  bool ppg_ui_active = false;
+  uint32_t ppg_next_start_tick = osKernelSysTick();
+  uint32_t ppg_window_end_tick = 0u;
 
   for (;;)
   {
@@ -393,7 +508,137 @@ void StartTask03(void const * argument)
           osMutexRelease(i2cMutexHandle);
 
           if (imu_ok) {
+            if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+              raise_wake_enabled = gSharedData.settings.raise_to_wake;
+              fall_detect_enabled = gSharedData.settings.fall_detect;
+              osMutexRelease(xSensorDataMutex);
+            }
+
               StepCounter_Update(imu.accel_g[0], imu.accel_g[1], imu.accel_g[2]);
+
+              /* Workout session updates (separate counters from home daily steps). */
+              {
+                uint32_t total_steps = StepCounter_GetSteps();
+                uint32_t now_tick = osKernelSysTick();
+                const float PUSHUP_RELEASE_G = 1.10f;
+                const uint32_t PUSHUP_MIN_INTERVAL_MS = 450u;
+
+                if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+                  if (gSharedData.workout.active) {
+                    uint8_t mode = gSharedData.workout.mode;
+                    if (mode == (uint8_t)WORKOUT_PUSHUPS) {
+                      if (!pushup_peak &&
+                          imu.accel_magnitude >= WORKOUT_PUSHUP_THRESH &&
+                          (now_tick - last_pushup_tick) >= PUSHUP_MIN_INTERVAL_MS) {
+                        pushup_peak = true;
+                      }
+                      if (pushup_peak && imu.accel_magnitude <= PUSHUP_RELEASE_G) {
+                        pushup_peak = false;
+                        gSharedData.workout.pushup_reps++;
+                        last_pushup_tick = now_tick;
+                      }
+                    } else {
+                      pushup_peak = false;
+                      uint32_t base = gSharedData.workout.start_total_steps;
+                      gSharedData.workout.session_steps =
+                          (total_steps >= base) ? (total_steps - base) : 0u;
+                    }
+                  } else {
+                    pushup_peak = false;
+                  }
+                  osMutexRelease(xSensorDataMutex);
+                }
+              }
+
+            /* Raise-to-wake: detect a wrist-raise movement while display is sleeping. */
+            {
+              const float WAKE_DELTA_MIN = (MPU6050_WAKE_THRESH * 0.55f);
+              const float WAKE_AXIS_Y_MIN = 0.20f;
+              const float WAKE_AXIS_Z_MIN = 0.65f;
+
+              float mag = imu.accel_magnitude;
+              float delta = mag - prev_accel_mag;
+              float ay = imu.accel_g[1];
+              float az = imu.accel_g[2];
+              if (delta < 0.0f) delta = -delta;
+              if (ay < 0.0f) ay = -ay;
+              if (az < 0.0f) az = -az;
+              prev_accel_mag = mag;
+
+                if (raise_wake_enabled && Power_GetState() == POWER_SLEEP) {
+                  if ((delta >= WAKE_DELTA_MIN) && ((ay >= WAKE_AXIS_Y_MIN) || (az >= WAKE_AXIS_Z_MIN))) {
+                    if (wake_count < 255u) wake_count++;
+                } else {
+                    if (wake_count > 0u) wake_count--;
+                }
+
+                if (wake_count >= MPU6050_WAKE_COUNT) {
+                  wake_count = 0u;
+                  Power_PostEvent(POWER_EVT_WRIST_RAISE, false);
+                }
+              } else {
+                wake_count = 0u;
+              }
+            }
+
+            /* Conservative fall detection (to reduce false positives):
+             * free-fall (<0.45g) -> impact (>2.2g) within 0.9s -> stillness around 1g for 1.2s. */
+            {
+              const float FALL_FREEFALL_G = 0.45f;
+              const float FALL_IMPACT_G = 2.20f;
+              const float FALL_STILL_BAND_G = 0.18f;
+              const uint32_t FREEFALL_TO_IMPACT_MS = 900u;
+              const uint32_t STILLNESS_CONFIRM_MS = 1200u;
+              const uint32_t IMPACT_TIMEOUT_MS = 4000u;
+              const uint32_t FALL_COOLDOWN_MS = 10000u;
+
+              uint32_t now_tick = osKernelSysTick();
+              float mag = imu.accel_magnitude;
+              float dev_from_1g = mag - 1.0f;
+              if (dev_from_1g < 0.0f) dev_from_1g = -dev_from_1g;
+
+              if (!fall_detect_enabled) {
+                fall_phase = 0u;
+                still_start_tick = 0u;
+              } else if ((now_tick - last_fall_tick) >= FALL_COOLDOWN_MS) {
+                if (fall_phase == 0u) {
+                  if (mag < FALL_FREEFALL_G) {
+                    fall_phase = 1u;
+                    freefall_tick = now_tick;
+                  }
+                } else if (fall_phase == 1u) {
+                  if ((now_tick - freefall_tick) > FREEFALL_TO_IMPACT_MS) {
+                    fall_phase = 0u;
+                  } else if (mag > FALL_IMPACT_G) {
+                    fall_phase = 2u;
+                    impact_tick = now_tick;
+                    still_start_tick = 0u;
+                  }
+                } else {
+                  if ((now_tick - impact_tick) > IMPACT_TIMEOUT_MS) {
+                    fall_phase = 0u;
+                    still_start_tick = 0u;
+                  } else if (dev_from_1g <= FALL_STILL_BAND_G) {
+                    if (still_start_tick == 0u) {
+                      still_start_tick = now_tick;
+                    } else if ((now_tick - still_start_tick) >= STILLNESS_CONFIRM_MS) {
+                      fall_phase = 0u;
+                      still_start_tick = 0u;
+                      last_fall_tick = now_tick;
+                      if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+                        gSharedData.motion.fall_detected = true;
+                        gSharedData.motion.last_fall_tick = now_tick;
+                        osMutexRelease(xSensorDataMutex);
+                      }
+                      Power_PostEvent(POWER_EVT_WRIST_RAISE, false);
+                    }
+                  } else {
+                    still_start_tick = 0u;
+                  }
+                }
+              }
+            }
+
               if ((loop_cnt % 10u) == 0u) {
                   int activity = StepCounter_GetActivityState();
                   if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
@@ -402,6 +647,7 @@ void StartTask03(void const * argument)
                       gSharedData.motion.calories_kcal = StepCounter_GetCalories();
                       gSharedData.motion.activity      = (ActivityState_t)activity;
                       gSharedData.motion.status        = SENSOR_OK;
+                gSharedData.motion.last_update_tick = osKernelSysTick();
                       osMutexRelease(xSensorDataMutex);
                   }
               }
@@ -415,12 +661,82 @@ void StartTask03(void const * argument)
           }
       }
 
-      if (max_ok) {
+          if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+            ppg_workout_active = gSharedData.workout.active;
+            ppg_ui_active = gSharedData.settings.ppg_force_active;
+            osMutexRelease(xSensorDataMutex);
+          }
+
+        {
+          uint32_t now_tick = osKernelSysTick();
+          if (Power_GetState() == POWER_SLEEP) {
+            ppg_mode = PPG_MODE_OFF;
+            } else if (ppg_workout_active || ppg_ui_active) {
+            ppg_mode = PPG_MODE_ACTIVE;
+          } else {
+            ppg_mode = PPG_MODE_PASSIVE;
+          }
+
+          if (ppg_mode != ppg_prev_mode) {
+            if (ppg_mode == PPG_MODE_OFF) {
+              ppg_collect_enabled = false;
+              ppg_window_end_tick = 0u;
+            } else if (ppg_mode == PPG_MODE_ACTIVE) {
+              ppg_collect_enabled = true;
+              osMutexWait(i2cMutexHandle, osWaitForever);
+              MAX30102_FlushFIFO();
+              osMutexRelease(i2cMutexHandle);
+              HR_Reset();
+              SpO2_Reset();
+            } else {
+              ppg_collect_enabled = false;
+              ppg_next_start_tick = now_tick;
+              ppg_window_end_tick = 0u;
+            }
+            ppg_prev_mode = ppg_mode;
+          }
+
+          if (ppg_mode == PPG_MODE_PASSIVE) {
+            if (!ppg_collect_enabled && (now_tick >= ppg_next_start_tick)) {
+              ppg_collect_enabled = true;
+              ppg_window_end_tick = now_tick + PPG_PASSIVE_WINDOW_MS;
+              osMutexWait(i2cMutexHandle, osWaitForever);
+              MAX30102_FlushFIFO();
+              osMutexRelease(i2cMutexHandle);
+              HR_Reset();
+              SpO2_Reset();
+            }
+
+            if (ppg_collect_enabled && (now_tick >= ppg_window_end_tick)) {
+              ppg_collect_enabled = false;
+              ppg_next_start_tick = now_tick + PPG_PASSIVE_PERIOD_MS;
+            }
+          }
+
+          if (ppg_mode == PPG_MODE_OFF) {
+            ppg_collect_enabled = false;
+            ppg_window_end_tick = 0u;
+          }
+        }
+
+        if (max_ok && ppg_collect_enabled) {
           osMutexWait(i2cMutexHandle, osWaitForever);
-          MAX30102_Status_t fs = MAX30102_ReadFIFO(fifo_buf, 8, &fifo_cnt);
+          MAX30102_Status_t fs = MAX30102_ReadFIFO(fifo_buf, 16, &fifo_cnt);
           osMutexRelease(i2cMutexHandle);
 
-          if (fs == MAX30102_OK) {
+          /* Print raw FIFO data every 2 s (200 loops) to diagnose IR=0 */
+          if ((loop_cnt % 200u) == 1u) {
+              osMutexWait(i2cMutexHandle, osWaitForever);
+              MAX30102_DumpRegs();
+              osMutexRelease(i2cMutexHandle);
+              printf("[MAX-FIFO] fs=%u cnt=%u ir0=%lu red0=%lu\r\n",
+                  (unsigned)fs, (unsigned)fifo_cnt,
+                  fifo_cnt ? (unsigned long)fifo_buf[0].ir  : 0UL,
+                  fifo_cnt ? (unsigned long)fifo_buf[0].red : 0UL);
+          }
+
+          if (fs == MAX30102_OK && fifo_cnt > 0) {
+              max_empty = 0u;
               for (uint8_t s = 0; s < fifo_cnt; s++) {
                   HR_AddSample(fifo_buf[s].ir);
                   SpO2_AddSample(fifo_buf[s].red, fifo_buf[s].ir);
@@ -433,6 +749,12 @@ void StartTask03(void const * argument)
                   bool finger     = HR_FingerPresent();
                   bool tach, brad;
                   HR_GetAlertStatus(&tach, &brad);
+
+                    if (!finger && ppg_mode == PPG_MODE_PASSIVE) {
+                      ppg_collect_enabled = false;
+                      ppg_next_start_tick = osKernelSysTick() + (PPG_PASSIVE_PERIOD_MS * 2u);
+                    }
+
                   if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
                       gSharedData.heart.bpm         = hr_valid   ? bpm  : 0u;
                       gSharedData.heart.spo2        = spo2_valid ? spo2 : 0u;
@@ -443,10 +765,66 @@ void StartTask03(void const * argument)
                       osMutexRelease(xSensorDataMutex);
                   }
               }
+          } else {
+              /* FIFO empty or I2C error: chip may be in power-down, reinit after 5s */
+              if (++max_empty >= 500u) {
+                  max_empty = 0u;
+                  printf("[MAX] FIFO stuck, reinit...\r\n");
+                  osMutexWait(i2cMutexHandle, osWaitForever);
+                  max_status = MAX30102_Init();
+                  if (max_status == MAX30102_OK) MAX30102_FlushFIFO();
+                  MAX30102_DumpRegs();
+                  osMutexRelease(i2cMutexHandle);
+                  max_ok = (max_status == MAX30102_OK);
+              }
           }
+              } else if (!ppg_collect_enabled) {
+                max_empty = 0u;
       }
 
       loop_cnt++;
+
+        /* Every 1 s: push rolling trend points for statistics page */
+        {
+          uint32_t now = osKernelSysTick();
+          if ((now - trend_tick) >= 1000u) {
+            trend_tick = now;
+
+            uint32_t steps_now = StepCounter_GetSteps();
+            uint32_t step_delta = (steps_now >= trend_last_steps) ?
+                      (steps_now - trend_last_steps) : 0u;
+            trend_last_steps = steps_now;
+
+            int act = StepCounter_GetActivityState();
+            uint32_t spm = step_delta * 60u;
+            if (spm > 255u) spm = 255u;
+
+            if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+              uint8_t idx = gSharedData.stats.trend_head;
+
+              gSharedData.stats.trend_hr[idx] =
+                (gSharedData.heart.hr_status == SENSOR_OK && gSharedData.heart.bpm > 0u)
+                ? (uint8_t)((gSharedData.heart.bpm > 255u) ? 255u : gSharedData.heart.bpm)
+                : 0u;
+
+              gSharedData.stats.trend_spo2[idx] =
+                (gSharedData.heart.spo2_status == SENSOR_OK && gSharedData.heart.spo2 > 0u)
+                ? gSharedData.heart.spo2 : 0u;
+
+              gSharedData.stats.trend_walk[idx] = (act == ACTIVITY_WALKING) ? (uint8_t)spm : 0u;
+              gSharedData.stats.trend_run[idx]  = (act == ACTIVITY_RUNNING) ? (uint8_t)spm : 0u;
+
+              idx = (uint8_t)((idx + 1u) % STATS_TREND_POINTS);
+              gSharedData.stats.trend_head = idx;
+              if (gSharedData.stats.trend_count < STATS_TREND_POINTS) {
+                gSharedData.stats.trend_count++;
+              }
+
+              osMutexRelease(xSensorDataMutex);
+            }
+          }
+        }
+
       /* Every 5 s: print live sensor values over UART for debugging */
       if ((loop_cnt % 500u) == 0u) {
           if (mpu_ok) {
@@ -454,22 +832,23 @@ void StartTask03(void const * argument)
               osMutexWait(i2cMutexHandle, osWaitForever);
               MPU6050_Read(&d);
               osMutexRelease(i2cMutexHandle);
-              printf("[MPU] ax=%.2f ay=%.2f az=%.2f steps=%lu\r\n",
-                  (double)d.accel_g[0], (double)d.accel_g[1], (double)d.accel_g[2],
+              printf("[MPU] ax=%d ay=%d az=%d steps=%lu (mg)\r\n",
+                  (int)(d.accel_g[0]*1000), (int)(d.accel_g[1]*1000), (int)(d.accel_g[2]*1000),
                   (unsigned long)StepCounter_GetSteps());
           } else {
               printf("[MPU] not connected\r\n");
           }
           if (max_ok) {
-              printf("[MAX] HR=%u bpm  SpO2=%u%%  finger=%s\r\n",
+              printf("[MAX] HR=%u bpm  SpO2=%u%%  finger=%s  IR=%lu\r\n",
                   (unsigned)gSharedData.heart.bpm,
                   (unsigned)gSharedData.heart.spo2,
-                  HR_FingerPresent() ? "YES" : "NO");
+                  HR_FingerPresent() ? "YES" : "NO",
+                  (unsigned long)HR_GetLastIR());
           } else {
               printf("[MAX] not connected\r\n");
           }
       }
-      osDelay(10); /* 100 Hz */
+      vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10)); /* 100 Hz */
   }
   /* USER CODE END StartTask03 */
 }
@@ -480,8 +859,116 @@ void StartTask04(void const * argument)
 {
   /* USER CODE BEGIN StartTask04 */
   (void)argument;
-  JDY31_Init();
-  for(;;) { osDelay(100); }
+  TickType_t last_wake = xTaskGetTickCount();
+  if (JDY31_Init() != JDY31_OK) {
+    printf("[BLE] JDY31 init failed\r\n");
+  } else {
+    printf("[BLE] JDY31 init OK\r\n");
+  }
+
+  JDY31_SendStr("HW BLE READY\r\n");
+
+  uint32_t last_pkt_tick = osKernelSysTick();
+  bool last_conn = false;
+  char line[64];
+
+  for(;;)
+  {
+      bool ble_enabled = true;
+      if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+        ble_enabled = gSharedData.ble.enabled;
+        osMutexRelease(xSensorDataMutex);
+      }
+
+      if (!ble_enabled) {
+        if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+          gSharedData.ble.connected = false;
+          gSharedData.ble.buffered_count = 0u;
+          osMutexRelease(xSensorDataMutex);
+        }
+        last_conn = false;
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(100));
+        continue;
+      }
+
+    bool connected = JDY31_IsConnected();
+    if (connected != last_conn) {
+      printf("[BLE] %s\r\n", connected ? "CONNECTED" : "DISCONNECTED");
+      last_conn = connected;
+    }
+
+    if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+      gSharedData.ble.connected = connected;
+      gSharedData.ble.buffered_count = 0u;
+      osMutexRelease(xSensorDataMutex);
+    }
+
+    while (JDY31_ReadLine(line, sizeof(line)) > 0u) {
+      BleCommand_t cmd;
+      BleCommandType_t type = JDY31_ParseCommand(line, &cmd);
+
+      switch (type) {
+      case BLE_CMD_SYNC_TIME: {
+        uint32_t t = cmd.param % 86400u;
+        uint8_t h = (uint8_t)(t / 3600u);
+        uint8_t m = (uint8_t)((t % 3600u) / 60u);
+        uint8_t s = (uint8_t)(t % 60u);
+        Sensor_Data_SetClock(h, m, s);
+        JDY31_SendStr("OK\r\n");
+        break;
+      }
+      case BLE_CMD_RESET_STEPS:
+        StepCounter_Reset();
+        if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+          gSharedData.motion.steps = 0u;
+          gSharedData.motion.distance_m = 0.0f;
+          gSharedData.motion.calories_kcal = 0.0f;
+          osMutexRelease(xSensorDataMutex);
+        }
+        JDY31_SendStr("OK\r\n");
+        break;
+      case BLE_CMD_GET_DATA:
+      {
+        BlePacket_t pkt = {0};
+        SoftClock_t clk = Sensor_Data_GetClock();
+        if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+          pkt.bpm   = gSharedData.heart.bpm;
+          pkt.spo2  = gSharedData.heart.spo2;
+          pkt.steps = gSharedData.motion.steps;
+          osMutexRelease(xSensorDataMutex);
+        }
+        pkt.hh = clk.hours;
+        pkt.mm = clk.minutes;
+        JDY31_SendPacket(&pkt);
+        break;
+      }
+      case BLE_CMD_UNKNOWN:
+        JDY31_SendStr("ERR:UNKNOWN_CMD\r\n");
+        break;
+      default:
+        break;
+      }
+    }
+
+    uint32_t now = osKernelSysTick();
+    if (connected && ((now - last_pkt_tick) >= BLE_PACKET_INTERVAL_MS)) {
+      BlePacket_t pkt = {0};
+      SoftClock_t clk = Sensor_Data_GetClock();
+      if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+        pkt.bpm   = gSharedData.heart.bpm;
+        pkt.spo2  = gSharedData.heart.spo2;
+        pkt.steps = gSharedData.motion.steps;
+        osMutexRelease(xSensorDataMutex);
+      }
+      pkt.hh = clk.hours;
+      pkt.mm = clk.minutes;
+
+      JDY31_SendPacket(&pkt);
+      last_pkt_tick = now;
+    }
+
+    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(100));
+  }
   /* USER CODE END StartTask04 */
 }
 

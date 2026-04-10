@@ -8,7 +8,30 @@
 #include "app_config.h"
 #include "ui_menu.h"
 #include "cmsis_os.h"
-#include "queue.h"  
+#include "task.h"
+
+extern osThreadId powerTaskHandle;
+
+#define POWER_EVT_BIT_USER_ACTIVITY  (1UL << 0)
+#define POWER_EVT_BIT_WRIST_RAISE    (1UL << 1)
+#define POWER_EVT_BIT_BT_RX          (1UL << 2)
+#define POWER_EVT_BIT_SLEEP_NOW      (1UL << 3)
+#define POWER_EVT_BIT_SLEEP_MENU     (1UL << 4)
+#define POWER_EVT_BIT_CANCEL_SLEEP   (1UL << 5)
+
+static uint32_t power_event_to_bits(PowerEvent_t event)
+{
+    switch (event)
+    {
+        case POWER_EVT_USER_ACTIVITY: return POWER_EVT_BIT_USER_ACTIVITY;
+        case POWER_EVT_WRIST_RAISE:   return POWER_EVT_BIT_WRIST_RAISE;
+        case POWER_EVT_BT_RX:         return POWER_EVT_BIT_BT_RX;
+        case POWER_EVT_SLEEP_NOW:     return POWER_EVT_BIT_SLEEP_NOW;
+        case POWER_EVT_SLEEP_MENU:    return POWER_EVT_BIT_SLEEP_MENU;
+        case POWER_EVT_CANCEL_SLEEP:  return POWER_EVT_BIT_CANCEL_SLEEP;
+        default:                      return 0UL;
+    }
+}
 
 /* state */
 static PowerState_t  s_state            = POWER_ACTIVE;
@@ -18,6 +41,7 @@ void Power_Init(void)
 {
     s_state             = POWER_ACTIVE;
     s_last_activity_tick = osKernelSysTick();
+    Power_ApplyState(POWER_ACTIVE);
 }
 
 void Power_Task(void const *argument)
@@ -27,6 +51,12 @@ void Power_Task(void const *argument)
 
     for (;;)
     {
+#if POWER_DISABLE_AUTO_SLEEP
+        if (s_state != POWER_ACTIVE) {
+            s_state = POWER_ACTIVE;
+            Power_ApplyState(POWER_ACTIVE);
+        }
+#else
         /* Check inactivity timers */
         uint32_t now  = osKernelSysTick();
         uint32_t idle = now - s_last_activity_tick;
@@ -38,36 +68,31 @@ void Power_Task(void const *argument)
         if (s_state == POWER_DIM && idle >= POWER_SLEEP_TIMEOUT_MS) {
             Power_EnterSleep();
         }
+#endif
 
-        /* Check event queue */
-        osEvent evt = osMessageGet(xPowerEventQueue, 100);
-        if (evt.status == osEventMessage) {
-            PowerEvent_t event = (PowerEvent_t)evt.value.v;
-            switch (event)
+        uint32_t pending = 0UL;
+        if (xTaskNotifyWait(0UL, 0xFFFFFFFFUL, &pending, pdMS_TO_TICKS(100)) == pdTRUE) {
+            if ((pending & (POWER_EVT_BIT_USER_ACTIVITY |
+                            POWER_EVT_BIT_WRIST_RAISE |
+                            POWER_EVT_BIT_BT_RX)) != 0UL)
             {
-                case POWER_EVT_USER_ACTIVITY:
-                case POWER_EVT_WRIST_RAISE:
-                case POWER_EVT_BT_RX:
-                    if (s_state != POWER_ACTIVE) {
-                        Power_WakeUp();
-                    }
-                    s_last_activity_tick = osKernelSysTick();
-                    break;
+                if (s_state != POWER_ACTIVE) {
+                    Power_WakeUp();
+                }
+                s_last_activity_tick = osKernelSysTick();
+            }
 
-                case POWER_EVT_SLEEP_MENU:
-                    UI_ShowSleepOverlay(true);
-                    break;
+            if ((pending & POWER_EVT_BIT_SLEEP_MENU) != 0UL) {
+                UI_ShowSleepOverlay(true);
+            }
 
-                case POWER_EVT_SLEEP_NOW:
-                    UI_ShowSleepOverlay(false);
-                    Power_EnterSleep();
-                    break;
+            if ((pending & POWER_EVT_BIT_SLEEP_NOW) != 0UL) {
+                UI_ShowSleepOverlay(false);
+                Power_EnterSleep();
+            }
 
-                case POWER_EVT_CANCEL_SLEEP:
-                    UI_ShowSleepOverlay(false);
-                    break;
-
-                default: break;
+            if ((pending & POWER_EVT_BIT_CANCEL_SLEEP) != 0UL) {
+                UI_ShowSleepOverlay(false);
             }
         }
     }
@@ -83,13 +108,19 @@ void Power_NotifyActivity(void)
 
 void Power_PostEvent(PowerEvent_t event, bool fromISR)
 {
+    const uint32_t bits = power_event_to_bits(event);
+    TaskHandle_t power_task = (TaskHandle_t)powerTaskHandle;
+
+    if (bits == 0UL || power_task == NULL) {
+        return;
+    }
+
     if (fromISR) {
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-        uint32_t val = (uint32_t)event;
-        xQueueSendFromISR(xPowerEventQueue, &val, &xHigherPriorityTaskWoken);
+        xTaskNotifyFromISR(power_task, bits, eSetBits, &xHigherPriorityTaskWoken);
         portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     } else {
-        osMessagePut(xPowerEventQueue, (uint32_t)event, 0);
+        xTaskNotify(power_task, bits, eSetBits);
     }
 }
 
@@ -100,6 +131,11 @@ PowerState_t Power_GetState(void)
 
 void Power_EnterSleep(void)
 {
+#if POWER_DISABLE_AUTO_SLEEP
+    s_state = POWER_ACTIVE;
+    Power_ApplyState(POWER_ACTIVE);
+    return;
+#endif
     s_state = POWER_SLEEP;
     Power_ApplyState(POWER_SLEEP);
     /* TODO: optionally call HAL_PWR_EnterSTOPMode() here for deep sleep */

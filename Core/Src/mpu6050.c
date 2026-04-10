@@ -43,6 +43,10 @@ static float s_gyro_scale  = 1.0f / 131.0f;   /* ±250°/s → LSB/dps = 131 */
  * ========================================================================== */
 static float s_accel_offset[3] = { 0.0f, 0.0f, 0.0f };
 
+/* Runtime-detected I2C address (auto-probes 0x68 and 0x69) */
+static uint16_t s_i2c_addr = MPU6050_I2C_ADDR;
+static uint8_t  s_who_am_i = 0;
+
 /* ========================================================================== *
  *  Internal helpers
  * ========================================================================== */
@@ -50,13 +54,13 @@ static HAL_StatusTypeDef reg_write(uint8_t reg, uint8_t val)
 {
     uint8_t buf[2] = { reg, val };
     return HAL_I2C_Master_Transmit(
-        &APP_I2C_HANDLE, MPU6050_I2C_ADDR, buf, 2, I2C_TIMEOUT_MS);
+        &APP_I2C_HANDLE, s_i2c_addr, buf, 2, I2C_TIMEOUT_MS);
 }
 
 static HAL_StatusTypeDef reg_read(uint8_t reg, uint8_t *out, uint8_t len)
 {
     return HAL_I2C_Mem_Read(
-        &APP_I2C_HANDLE, MPU6050_I2C_ADDR, reg,
+        &APP_I2C_HANDLE, s_i2c_addr, reg,
         I2C_MEMADD_SIZE_8BIT, out, len, I2C_TIMEOUT_MS);
 }
 
@@ -67,13 +71,24 @@ MPU6050_Status_t MPU6050_Init(void)
 {
     uint8_t who_am_i = 0;
 
-    /* WHO_AM_I check */
+    /* Auto-probe: try 0x68 first, fall back to 0x69 (AD0 tied HIGH) */
+    s_i2c_addr = MPU6050_I2C_ADDR;           /* 0x68 << 1 */
+    if (HAL_I2C_IsDeviceReady(&APP_I2C_HANDLE, s_i2c_addr, 2, 10) != HAL_OK) {
+        s_i2c_addr = (0x69u << 1);            /* try AD0=HIGH variant */
+        if (HAL_I2C_IsDeviceReady(&APP_I2C_HANDLE, s_i2c_addr, 2, 10) != HAL_OK) {
+            return MPU6050_ERR_I2C;           /* not found at either address */
+        }
+    }
+
+    /* WHO_AM_I check — accept clones (0x72, 0x98, 0x19…) that ACK but
+     * return a non-0x68 ID. Only reject 0x00/0xFF which mean bus stuck. */
     if (reg_read(MPU6050_REG_WHO_AM_I, &who_am_i, 1) != HAL_OK) {
         return MPU6050_ERR_I2C;
     }
-    if (who_am_i != MPU6050_WHO_AM_I_VALUE) {
+    if (who_am_i == 0x00 || who_am_i == 0xFF) {
         return MPU6050_ERR_WHOAMI;
     }
+    s_who_am_i = who_am_i;
 
     /* Wake up (clear SLEEP bit in PWR_MGMT_1) */
     reg_write(MPU6050_REG_PWR_MGMT_1, 0x00);
@@ -210,4 +225,14 @@ bool MPU6050_IsConnected(void)
     uint8_t who_am_i = 0;
     if (reg_read(MPU6050_REG_WHO_AM_I, &who_am_i, 1) != HAL_OK) return false;
     return (who_am_i == MPU6050_WHO_AM_I_VALUE);
+}
+
+uint8_t MPU6050_GetAddr(void)
+{
+    return (uint8_t)(s_i2c_addr >> 1);
+}
+
+uint8_t MPU6050_GetWhoAmI(void)
+{
+    return s_who_am_i;
 }

@@ -9,6 +9,7 @@
  *         [3] Stopwatch      → SCREEN_STOPWATCH
  *         [4] Statistics     → SCREEN_STATS
  *         [5] Settings       → SCREEN_SETTINGS
+ *         [6] Connect        → SCREEN_CONNECT
  *     BACK (5 s on home)     → SCREEN_POWER_MENU
  */
 
@@ -32,10 +33,13 @@ typedef enum {
     SCREEN_MENU,            /* main scrollable menu                          */
     SCREEN_HR_MEASURE,      /* beating heart + progress ring                 */
     SCREEN_SPO2_MEASURE,    /* SpO2 measurement                              */
-    SCREEN_WORKOUT,         /* walk / run / push-up mode                     */
+    SCREEN_WORKOUT_MENU,    /* 3-item sub-menu: walking / running / push-ups  */
+    SCREEN_WORKOUT,         /* active training screen                        */
+    SCREEN_WORKOUT_CONFIRM, /* "Stop training?" YES/NO overlay               */
     SCREEN_STOPWATCH,       /* stopwatch                                     */
     SCREEN_STATS,           /* 7-day bar chart                               */
     SCREEN_SETTINGS,        /* settings list                                 */
+    SCREEN_CONNECT,         /* Bluetooth connect / pairing helper            */
     SCREEN_POWER_MENU,      /* sleep / cancel (BACK 5 s on home)             */
     SCREEN_COUNT,
 } ScreenId_t;
@@ -43,7 +47,7 @@ typedef enum {
 /* ========================================================================== *
  *  Menu / settings items
  * ========================================================================== */
-#define MENU_ITEM_COUNT     6u
+#define MENU_ITEM_COUNT     7u
 
 typedef enum {
     SETTING_BRIGHTNESS = 0,
@@ -79,6 +83,7 @@ typedef struct {
     /* Menu / settings scrolling */
     uint8_t       menu_cursor;       /* highlighted row in SCREEN_MENU        */
     uint8_t       settings_cursor;   /* highlighted row in SCREEN_SETTINGS    */
+    uint8_t       stats_cursor;      /* 0=HR 1=SpO2 2=Walking 3=Running       */
 
     /* HR / SpO2 measurement state */
     MeasPhase_t   meas_phase;
@@ -86,11 +91,15 @@ typedef struct {
     uint32_t      meas_start_tick;
     uint16_t      meas_bpm_result;
     uint8_t       meas_spo2_result;
+    uint16_t      home_last_bpm;    /* last completed HR measurement         */
+    uint8_t       home_last_spo2;   /* last completed SpO2 measurement       */
     uint8_t       heart_anim_frame;  /* 0 or 1 for beat animation             */
     uint32_t      heart_anim_tick;
 
     /* Workout */
     WorkoutMode_t workout_mode;
+    uint8_t       workout_cursor;    /* highlighted row in SCREEN_WORKOUT_MENU */
+    uint8_t       workout_confirm_cursor; /* 0=YES 1=NO in confirm dialog     */
     bool          workout_active;
     uint32_t      workout_reps;      /* steps or push-up reps                 */
     uint32_t      workout_start_tick;

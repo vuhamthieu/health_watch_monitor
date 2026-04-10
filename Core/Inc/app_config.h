@@ -63,6 +63,10 @@ extern UART_HandleTypeDef huart1;
 #define BLE_TX_BUF_SIZE         128u    /**< UART TX buffer size              */
 #define BLE_PACKET_INTERVAL_MS  5000u   /**< Periodic data send interval      */
 #define BLE_DEVICE_NAME         "HealthWatch"
+#define BLE_PAIR_PIN            "1234"  /**< JDY-31 default pairing PIN        */
+
+/* Debug logging over UART1 (shared with JDY-31). Keep OFF in normal BLE use. */
+#define APP_ENABLE_UART_DEBUG   0u
 
 /* OLED */
 #define OLED_WIDTH              128u
@@ -73,6 +77,13 @@ extern UART_HandleTypeDef huart1;
 #define MPU6050_SAMPLE_RATE_HZ  100u    /**< Accelerometer sampling rate      */
 #define MPU6050_ACCEL_FSR       2u      /**< Full-scale range: ±2g            */
 #define MPU6050_GYRO_FSR        250u    /**< Full-scale range: ±250 deg/s     */
+
+/* PPG background policy (MAX30102)
+ * PASSIVE: collect for WINDOW_MS, then cooldown for PERIOD_MS.
+ * ACTIVE: continuous collection while workout is active. */
+#define PPG_PASSIVE_PERIOD_MS  180000u /**< 3 min cooldown between passive windows */
+#define PPG_PASSIVE_WINDOW_MS   20000u /**< 20 s passive measurement window         */
+#define PPG_ACTIVE_PERIOD_MS     1000u /**< reserved for active-mode tuning         */
 
 /* Wake gesture: magnitude of acc change above this = wrist raise */
 #define MPU6050_WAKE_THRESH     0.5f    /**< g (above 1g baseline)            */
@@ -99,10 +110,12 @@ extern UART_HandleTypeDef huart1;
 #define SPO2_LOW_THRESHOLD      95u     /**< Low SpO2 alert threshold         */
 
 /* power */
-#define POWER_DIM_TIMEOUT_MS    30000u  /**< Inactivity → dim display         */
+#define POWER_DIM_TIMEOUT_MS    15000u  /**< Inactivity → dim display         */
 #define POWER_SLEEP_TIMEOUT_MS  60000u  /**< Inactivity → sleep mode          */
 #define POWER_OLED_DIM_CONTRAST 50u     /**< Display contrast in dim mode     */
 #define POWER_OLED_FULL_CONTRAST 0xCF   /**< Display contrast in active mode  */
+/* Diagnostic mode: keep OLED always on while debugging display issues. */
+#define POWER_DISABLE_AUTO_SLEEP 0u
 
 /* UI */
 #define UI_REFRESH_PERIOD_MS    100u    /**< OLED refresh rate (10 Hz max)    */
