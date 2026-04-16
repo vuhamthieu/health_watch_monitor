@@ -1140,6 +1140,29 @@ void OLED_PagePowerMenu(uint8_t cursor)
     SH1106_Flush();
 }
 
+void OLED_DrawFallAlertOverlay(void)
+{
+    /* Full-screen blackout so nothing from the previous page leaks through */
+    OLED_FillRect(0, 0, 128, 64, 0);
+
+    /* Centered popup box */
+    const uint8_t x = 6u;
+    const uint8_t y = 10u;
+    const uint8_t w = 116u;
+    const uint8_t h = 44u;
+    OLED_DrawRect(x, y, w, h, 1);
+
+    /* Title row */
+    OLED_DrawStr((uint8_t)(x + 25u), (uint8_t)(y + 6u), "FALL DETECTED", OLED_FONT_6x8, 1);
+    OLED_DrawLine((uint8_t)(x + 2u), (uint8_t)(y + 16u), (uint8_t)(x + w - 3u), (uint8_t)(y + 16u), 1);
+
+    /* Body text (kept strictly inside the box) */
+    OLED_DrawStr((uint8_t)(x + 16u), (uint8_t)(y + 22u), "Please check now", OLED_FONT_6x8, 1);
+    /* Keep 1px margin from bottom border: 6x8 font uses 8px height */
+    OLED_DrawStr((uint8_t)(x + 28u), (uint8_t)(y + 31u), "Are you okay?", OLED_FONT_6x8, 1);
+    SH1106_Flush();
+}
+
 /* ── Splash screen ───────────────────────────────────────────────────────── */
 void OLED_PageSplash(void)
 {

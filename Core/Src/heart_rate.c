@@ -1,5 +1,4 @@
-/* heart_rate.c - BPM from IR signal: DC removal high-pass + adaptive peak detect
- * TODO: tune HR_DC_FILTER_ALPHA with real MAX30102 data */
+/* heart_rate.c - Robust BPM from MAX30102 IR: DC removal + low-pass + dynamic peak detect */
 
 #include "heart_rate.h"
 #include "cmsis_os.h"
@@ -7,20 +6,31 @@
 #include <math.h>
 #include <stdbool.h>
 
-/* state */
-static uint32_t s_ir_buf[HR_BUFFER_SIZE];
-static uint16_t s_buf_head  = 0;
-static uint32_t s_sample_count = 0;
+/* Internal filter/peak constants (tuned for MAX30102_SAMPLE_RATE_HZ = 100 Hz) */
+#define HR_LP_BETA               0.180f  /* Low-pass smoothing for AC component */
+#define HR_ENV_BETA              0.050f  /* Envelope tracker speed */
+#define HR_THRESH_SCALE          0.550f  /* Dynamic threshold = envelope * scale */
+#define HR_THRESH_FLOOR          40.0f   /* Minimum threshold to avoid noise triggers */
+#define HR_NEG_ARM_FACTOR        0.350f  /* Need negative swing before accepting next peak */
+#define HR_BPM_JUMP_LIMIT        35u     /* Reject sudden BPM jumps caused by motion */
+#define HR_OUTLIER_MIN_BPM       40u
+#define HR_OUTLIER_MAX_BPM       160u
+#define HR_OUTLIER_NEAR_REST_JUMP 25u
 
-/* DC removal */
-static float    s_dc_filter  = 0.0f;
-static float    s_prev_dc    = 0.0f;
+/* state */
+static uint32_t s_last_ir = 0;
+static uint32_t s_sample_index = 0;
+
+/* DC removal + low-pass */
+static float    s_dc_estimate = 0.0f;
+static float    s_lp_out      = 0.0f;
+static float    s_prev_lp     = 0.0f;
+static float    s_envelope    = 0.0f;
 
 /* Peak detection */
-static float    s_threshold  = 0.0f;
-static float    s_prev_ac    = 0.0f;
-static bool     s_peak_found = false;
-static uint32_t s_last_peak_tick = 0;
+static bool     s_prev_rising     = false;
+static bool     s_peak_armed      = false;
+static uint32_t s_last_peak_sample = 0;
 
 /* BPM moving average */
 static uint16_t s_bpm_buf[HR_MA_WINDOW];
@@ -29,20 +39,39 @@ static uint8_t  s_bpm_count  = 0;
 static uint16_t s_bpm_output = 0;
 
 static bool     s_finger_present = false;
-static uint32_t s_last_ir        = 0;
+
+static bool hr_is_outlier(uint16_t bpm_inst)
+{
+    if (bpm_inst < HR_OUTLIER_MIN_BPM || bpm_inst > HR_OUTLIER_MAX_BPM) {
+        return true;
+    }
+
+    if (s_bpm_count >= 3u) {
+        uint16_t avg = s_bpm_output;
+        uint16_t diff = (bpm_inst > avg)
+                      ? (uint16_t)(bpm_inst - avg)
+                      : (uint16_t)(avg - bpm_inst);
+
+        if (avg >= 55u && avg <= 110u && diff > HR_OUTLIER_NEAR_REST_JUMP) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 void HR_Reset(void)
 {
-    memset(s_ir_buf,  0, sizeof(s_ir_buf));
     memset(s_bpm_buf, 0, sizeof(s_bpm_buf));
-    s_buf_head       = 0;
-    s_sample_count   = 0;
-    s_dc_filter      = 0.0f;
-    s_prev_dc        = 0.0f;
-    s_threshold      = 0.0f;
-    s_prev_ac        = 0.0f;
-    s_peak_found     = false;
-    s_last_peak_tick = 0;
+    s_last_ir          = 0;
+    s_sample_index     = 0;
+    s_dc_estimate      = 0.0f;
+    s_lp_out           = 0.0f;
+    s_prev_lp          = 0.0f;
+    s_envelope         = 0.0f;
+    s_prev_rising      = false;
+    s_peak_armed       = false;
+    s_last_peak_sample = 0;
     s_bpm_idx        = 0;
     s_bpm_count      = 0;
     s_bpm_output     = 0;
@@ -51,53 +80,104 @@ void HR_Reset(void)
 
 void HR_AddSample(uint32_t ir_sample)
 {
+    const uint32_t fs_hz = (uint32_t)MAX30102_SAMPLE_RATE_HZ;
+    const uint32_t min_ibi_samples = (60u * fs_hz) / (uint32_t)HR_VALID_MAX;
+    const uint32_t max_ibi_samples = (60u * fs_hz) / (uint32_t)HR_VALID_MIN;
+
     s_last_ir = ir_sample;
-    s_ir_buf[s_buf_head] = ir_sample;
-    s_buf_head = (s_buf_head + 1) % HR_BUFFER_SIZE;
-    s_sample_count++;
+    s_sample_index++;
 
     /* Finger detection */
     s_finger_present = (ir_sample >= MAX30102_IR_MIN_VALID);
-    if (!s_finger_present) return;
-
-    /* DC removal (high-pass): y[n] = α × (y[n-1] + x[n] - x[n-1]) */
-    float x  = (float)ir_sample;
-    float dc = HR_DC_FILTER_ALPHA * (s_prev_dc + x - (float)
-               s_ir_buf[(s_buf_head + HR_BUFFER_SIZE - 2) % HR_BUFFER_SIZE]);
-    float ac = x - dc;
-    s_prev_dc = dc;
-
-    /* Adaptive threshold: 60% of recent max AC */
-    if (fabsf(ac) > s_threshold) s_threshold = fabsf(ac) * 0.6f;
-    else s_threshold *= 0.9999f; /* Slowly decay threshold */
-
-    /* Rising edge peak detection */
-    if (!s_peak_found && ac > s_threshold && ac > s_prev_ac) {
-        s_peak_found = true;
+    if (!s_finger_present) {
+        s_dc_estimate      = 0.0f;
+        s_lp_out           = 0.0f;
+        s_prev_lp          = 0.0f;
+        s_envelope         = 0.0f;
+        s_prev_rising      = false;
+        s_peak_armed       = false;
+        s_last_peak_sample = 0;
+        s_bpm_count        = 0;
+        s_bpm_output       = 0;
+        return;
     }
-    else if (s_peak_found && ac < s_prev_ac) {
-        /* Falling from peak */
-        s_peak_found = false;
-        uint32_t now = osKernelSysTick();
-        uint32_t ibi = now - s_last_peak_tick; /* inter-beat interval (ms) */
 
-        if (s_last_peak_tick != 0 && ibi > 0) {
-            uint16_t bpm_inst = (uint16_t)(60000u / ibi);
+    /* 1) DC removal via one-pole high-pass: hp = x - DC(x) */
+    float x = (float)ir_sample;
+    s_dc_estimate += HR_DC_FILTER_ALPHA * (x - s_dc_estimate);
+    float hp = x - s_dc_estimate;
 
-            if (bpm_inst >= HR_VALID_MIN && bpm_inst <= HR_VALID_MAX) {
-                /* Moving average */
-                s_bpm_buf[s_bpm_idx] = bpm_inst;
-                s_bpm_idx = (s_bpm_idx + 1) % HR_MA_WINDOW;
-                if (s_bpm_count < HR_MA_WINDOW) s_bpm_count++;
+    /* 2) Low-pass filter to reduce high-frequency and line/interference noise */
+    s_lp_out += HR_LP_BETA * (hp - s_lp_out);
 
-                uint32_t sum = 0;
-                for (uint8_t i = 0; i < s_bpm_count; i++) sum += s_bpm_buf[i];
-                s_bpm_output = (uint16_t)(sum / s_bpm_count);
+    /* Envelope for dynamic threshold */
+    float abs_lp = fabsf(s_lp_out);
+    s_envelope += HR_ENV_BETA * (abs_lp - s_envelope);
+
+    float threshold = s_envelope * HR_THRESH_SCALE;
+    if (threshold < HR_THRESH_FLOOR) {
+        threshold = HR_THRESH_FLOOR;
+    }
+
+    /* Arm detector only after a meaningful negative swing (full pulse cycle) */
+    if (s_lp_out < (-HR_NEG_ARM_FACTOR * threshold)) {
+        s_peak_armed = true;
+    }
+
+    /* 3) Peak detection: local maxima + dynamic threshold + refractory */
+    bool rising = (s_lp_out > s_prev_lp);
+    if (s_prev_rising && !rising) {
+        float peak_amp = s_prev_lp;
+        uint32_t peak_sample = s_sample_index - 1u;
+
+        if (s_peak_armed && peak_amp > threshold) {
+            uint32_t gap = (s_last_peak_sample > 0u) ? (peak_sample - s_last_peak_sample) : 0u;
+
+            if (s_last_peak_sample == 0u || gap >= min_ibi_samples) {
+                if (s_last_peak_sample != 0u && gap <= max_ibi_samples && gap > 0u) {
+                    uint16_t bpm_inst = (uint16_t)(((60u * fs_hz) + (gap / 2u)) / gap);
+
+                    if (bpm_inst >= HR_VALID_MIN && bpm_inst <= HR_VALID_MAX) {
+                        if (hr_is_outlier(bpm_inst)) {
+                            s_last_peak_sample = peak_sample;
+                            s_peak_armed = false;
+                            s_prev_rising = rising;
+                            s_prev_lp = s_lp_out;
+                            return;
+                        }
+
+                        bool jump_ok = true;
+                        if (s_bpm_count > 0u) {
+                            uint16_t diff = (bpm_inst > s_bpm_output)
+                                          ? (uint16_t)(bpm_inst - s_bpm_output)
+                                          : (uint16_t)(s_bpm_output - bpm_inst);
+                            jump_ok = (diff <= HR_BPM_JUMP_LIMIT);
+                        }
+
+                        if (jump_ok) {
+                            s_bpm_buf[s_bpm_idx] = bpm_inst;
+                            s_bpm_idx = (uint8_t)((s_bpm_idx + 1u) % HR_MA_WINDOW);
+                            if (s_bpm_count < HR_MA_WINDOW) {
+                                s_bpm_count++;
+                            }
+
+                            uint32_t sum = 0u;
+                            for (uint8_t i = 0u; i < s_bpm_count; i++) {
+                                sum += s_bpm_buf[i];
+                            }
+                            s_bpm_output = (uint16_t)(sum / s_bpm_count);
+                        }
+                    }
+                }
+
+                s_last_peak_sample = peak_sample;
+                s_peak_armed = false;
             }
         }
-        s_last_peak_tick = now;
     }
-    s_prev_ac = ac;
+
+    s_prev_rising = rising;
+    s_prev_lp = s_lp_out;
 }
 
 bool HR_GetBPM(uint16_t *bpm_out)

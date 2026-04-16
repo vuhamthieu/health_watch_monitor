@@ -18,7 +18,7 @@
 #include "sh1106.h"
 #include <stdio.h>
 
-/* Retarget printf → UART1 (PA9=TX, 9600 baud) — connect CH340 RX to PA9 */
+/* Retarget printf ->UART1 (PA9=TX, 9600 baud) — connect CH340 RX to PA9 */
 int __io_putchar(int ch)
 {
 #if APP_ENABLE_UART_DEBUG
@@ -479,6 +479,7 @@ void StartTask03(void const * argument)
   float prev_accel_mag = 1.0f;
 
   uint8_t fall_phase = 0u;      /* 0=idle, 1=freefall seen, 2=impact seen */
+  uint8_t freefall_count = 0u;  /* consecutive samples below freefall threshold */
   uint32_t freefall_tick = 0u;
   uint32_t impact_tick = 0u;
   uint32_t still_start_tick = 0u;
@@ -587,6 +588,7 @@ void StartTask03(void const * argument)
               const float FALL_FREEFALL_G = 0.45f;
               const float FALL_IMPACT_G = 2.20f;
               const float FALL_STILL_BAND_G = 0.18f;
+              const uint8_t FALL_FREEFALL_MIN_COUNT = 3u; /* reject single-sample glitches */
               const uint32_t FREEFALL_TO_IMPACT_MS = 900u;
               const uint32_t STILLNESS_CONFIRM_MS = 1200u;
               const uint32_t IMPACT_TIMEOUT_MS = 4000u;
@@ -600,30 +602,45 @@ void StartTask03(void const * argument)
               if (!fall_detect_enabled) {
                 fall_phase = 0u;
                 still_start_tick = 0u;
+                freefall_count = 0u;
               } else if ((now_tick - last_fall_tick) >= FALL_COOLDOWN_MS) {
                 if (fall_phase == 0u) {
                   if (mag < FALL_FREEFALL_G) {
-                    fall_phase = 1u;
-                    freefall_tick = now_tick;
+                    if (freefall_count == 0u) {
+                      freefall_tick = now_tick;
+                    }
+                    if (freefall_count < 255u) {
+                      freefall_count++;
+                    }
+                    if (freefall_count >= FALL_FREEFALL_MIN_COUNT) {
+                      fall_phase = 1u;
+                      /* freefall_tick remains the time freefall started (1st low-g sample) */
+                    }
+                  } else {
+                    freefall_count = 0u;
                   }
                 } else if (fall_phase == 1u) {
                   if ((now_tick - freefall_tick) > FREEFALL_TO_IMPACT_MS) {
                     fall_phase = 0u;
+                    freefall_count = 0u;
                   } else if (mag > FALL_IMPACT_G) {
                     fall_phase = 2u;
                     impact_tick = now_tick;
                     still_start_tick = 0u;
+                    freefall_count = 0u;
                   }
                 } else {
                   if ((now_tick - impact_tick) > IMPACT_TIMEOUT_MS) {
                     fall_phase = 0u;
                     still_start_tick = 0u;
+                    freefall_count = 0u;
                   } else if (dev_from_1g <= FALL_STILL_BAND_G) {
                     if (still_start_tick == 0u) {
                       still_start_tick = now_tick;
                     } else if ((now_tick - still_start_tick) >= STILLNESS_CONFIRM_MS) {
                       fall_phase = 0u;
                       still_start_tick = 0u;
+                      freefall_count = 0u;
                       last_fall_tick = now_tick;
                       if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
                         gSharedData.motion.fall_detected = true;

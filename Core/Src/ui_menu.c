@@ -36,6 +36,11 @@ static UBaseType_t s_btn_q_peak = 0u;
 /* Heart animation: toggle frame every 400 ms */
 #define HEART_ANIM_MS       400u
 
+/* Fall alert overlay visibility duration */
+#define FALL_ALERT_SHOW_MS  8000u
+
+static uint32_t s_fall_alert_until_tick = 0u;
+
 /* ========================================================================== *
  *  Init
  * ========================================================================== */
@@ -132,6 +137,11 @@ void UI_Task(void const *argument)
         bool ppg_force_active =
             (s_ui.screen == SCREEN_HR_MEASURE || s_ui.screen == SCREEN_SPO2_MEASURE);
         if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+            if (gSharedData.motion.fall_detected) {
+                gSharedData.motion.fall_detected = false;
+                s_fall_alert_until_tick = now + FALL_ALERT_SHOW_MS;
+                s_dirty = true;
+            }
             gSharedData.settings.ppg_force_active = ppg_force_active;
             osMutexRelease(xSensorDataMutex);
         }
@@ -206,6 +216,20 @@ void UI_HandleButtonEvent(const ButtonEvent_t *evt)
 
     s_ui.last_activity_tick = osKernelSysTick();
     Power_NotifyActivity();
+
+    /* ── Fall alert overlay is modal ──
+     * If the overlay is visible, consume input and dismiss it on the first
+     * button action. This prevents BACK from navigating screens while the
+     * overlay timer is still running (which feels like it needs multiple
+     * presses to close).
+     */
+    if ((int32_t)(s_fall_alert_until_tick - osKernelSysTick()) > 0) {
+        if (evt->type == BTN_EVT_PRESS || evt->type == BTN_EVT_LONG_PRESS) {
+            s_fall_alert_until_tick = 0u;
+            s_dirty = true;
+            return;
+        }
+    }
 
     /* ── Power menu intercepts all input ─── */
     if (s_ui.screen == SCREEN_POWER_MENU) {
@@ -647,9 +671,13 @@ void UI_Render(void)
                 s_ui.screen = saved;
             }
             OLED_PagePowerMenu(s_ui.power_cursor);
-            return; /* OLED_PagePowerMenu already calls SH1106_Flush */
+            break;
 
         default: break;
+    }
+
+    if ((int32_t)(s_fall_alert_until_tick - osKernelSysTick()) > 0) {
+        OLED_DrawFallAlertOverlay();
     }
 }
 

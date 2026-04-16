@@ -5,10 +5,11 @@
  * Algorithm overview:
  *   1. Accumulate IR samples from MAX30102 FIFO into a circular buffer.
  *   2. Apply DC removal (high-pass filter) to extract AC component.
- *   3. Detect peaks in the AC signal using adaptive threshold.
- *   4. Calculate inter-beat interval (IBI) in ms → BPM = 60000 / IBI.
- *   5. Apply moving-average smoothing over last 4 beats.
- *   6. Reject readings outside HR_VALID_MIN – HR_VALID_MAX range.
+ *   3. Apply low-pass smoothing to suppress high-frequency/motion noise.
+ *   4. Detect peaks using adaptive (dynamic) threshold + refractory rules.
+ *   5. Calculate inter-beat interval (IBI) in ms → BPM = 60000 / IBI.
+ *   6. Apply moving-average smoothing over last beats.
+ *   7. Reject readings outside HR_VALID_MIN – HR_VALID_MAX range.
  *
  * Feed raw IR samples via HR_AddSample().
  * Read current BPM via HR_GetBPM().
@@ -28,9 +29,9 @@ extern "C" {
 /* ========================================================================== *
  *  Configuration
  * ========================================================================== */
-#define HR_BUFFER_SIZE      100u    /**< Circular buffer depth (samples)      */
-#define HR_MA_WINDOW        4u      /**< Moving average window (beats)        */
-#define HR_DC_FILTER_ALPHA  0.95f   /**< DC removal high-pass alpha           */
+#define HR_BUFFER_SIZE      100u    /**< Reserved legacy buffer depth          */
+#define HR_MA_WINDOW        6u      /**< Moving average window (beats)         */
+#define HR_DC_FILTER_ALPHA  0.01f   /**< DC estimator alpha for high-pass path */
 
 /* ========================================================================== *
  *  API

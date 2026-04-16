@@ -162,6 +162,9 @@ void OLED_PageConnect(bool bt_enabled, bool bt_connected);
 /* Power/sleep menu */
 void OLED_PagePowerMenu(uint8_t cursor);
 
+/* Fall-detection notification overlay */
+void OLED_DrawFallAlertOverlay(void);
+
 /* Splash screen */
 void OLED_PageSplash(void);
 
