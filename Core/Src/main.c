@@ -418,7 +418,7 @@ void StartTask02(void const * argument)
 /* USER CODE END Header_StartTask03 */
 void StartTask03(void const * argument)
 {
-  /* USER CODE BEGIN StartTask03 */
+  /* USER CODE BEGIN StarItTask03 */
   (void)argument;
   TickType_t last_wake = xTaskGetTickCount();
   enum PPG_MODE_OFF;
@@ -883,7 +883,14 @@ void StartTask04(void const * argument)
     printf("[BLE] JDY31 init OK\r\n");
   }
 
-  JDY31_SendStr("HW BLE READY\r\n");
+  bool prev_ble_enabled = true;
+  if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
+    prev_ble_enabled = gSharedData.ble.enabled;
+    osMutexRelease(xSensorDataMutex);
+  }
+  if (prev_ble_enabled) {
+    JDY31_SendStr("HW BLE READY\r\n");
+  }
 
   uint32_t last_pkt_tick = osKernelSysTick();
   bool last_conn = false;
@@ -895,6 +902,15 @@ void StartTask04(void const * argument)
       if (osMutexWait(xSensorDataMutex, 5u) == osOK) {
         ble_enabled = gSharedData.ble.enabled;
         osMutexRelease(xSensorDataMutex);
+      }
+
+      /* Apply state transitions to the JDY module (best-effort). */
+      if (ble_enabled != prev_ble_enabled) {
+        (void)JDY31_SetEnabled(ble_enabled);
+        if (ble_enabled) {
+          JDY31_SendStr("HW BLE READY\r\n");
+        }
+        prev_ble_enabled = ble_enabled;
       }
 
       if (!ble_enabled) {
@@ -968,7 +984,12 @@ void StartTask04(void const * argument)
     }
 
     uint32_t now = osKernelSysTick();
-    if (connected && ((now - last_pkt_tick) >= BLE_PACKET_INTERVAL_MS)) {
+    /* Send periodic packets whenever Bluetooth feature is enabled.
+     * Relying on RX activity to infer 'connected' can stop updates if the phone
+     * app is passive (receives only). Sending anyway is safe; if no phone is
+     * connected, the module will just drop/ignore the UART payload.
+     */
+    if (((now - last_pkt_tick) >= BLE_PACKET_INTERVAL_MS)) {
       BlePacket_t pkt = {0};
       SoftClock_t clk = Sensor_Data_GetClock();
       if (osMutexWait(xSensorDataMutex, 5u) == osOK) {

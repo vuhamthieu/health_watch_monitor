@@ -65,6 +65,12 @@ extern UART_HandleTypeDef huart1;
 #define BLE_DEVICE_NAME         "HealthWatch"
 #define BLE_PAIR_PIN            "1234"  /**< JDY-31 default pairing PIN        */
 
+/* JDY-31 AT-control (advertising/sleep) is firmware-dependent.
+ * Keep disabled by default to avoid breaking UART data mode.
+ * Enable only after confirming your module's AT command set.
+ */
+#define JDY31_ENABLE_AT_CONTROL  0u
+
 /* Debug logging over UART1 (shared with JDY-31). Keep OFF in normal BLE use. */
 #define APP_ENABLE_UART_DEBUG   0u
 

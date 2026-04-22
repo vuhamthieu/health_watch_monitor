@@ -95,6 +95,20 @@ JDY31_Status_t JDY31_SendStr(const char *str);
 JDY31_Status_t JDY31_SendRaw(const uint8_t *data, uint16_t len);
 
 /**
+ * @brief  Best-effort enable/disable the JDY-31 radio.
+ *
+ * Firmware previously only stopped processing when Bluetooth was disabled,
+ * but the module could remain discoverable on the phone because it's still
+ * powered. Without a dedicated EN/KEY pin, the only option is to attempt
+ * AT commands (works only when the module is NOT connected).
+ *
+ * This call is safe to use even if the module doesn't support some commands
+ * (it will simply ignore/ERROR them); it will avoid sending AT commands while
+ * a connection is detected.
+ */
+JDY31_Status_t JDY31_SetEnabled(bool enabled);
+
+/**
  * @brief  Parse a complete line from the RX buffer into a BleCommand_t.
  *         Called by bleTask when a '\n' is received.
  * @param  line  Null-terminated received line (without \r\n).

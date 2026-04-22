@@ -33,6 +33,16 @@ static uint8_t  s_rx_byte;   /* Single-byte DMA/IT receive target */
 static volatile bool s_connected = false;
 static volatile uint32_t s_last_rx_tick = 0;
 
+/* Some JDY firmwares support advertising enable + sleep commands.
+ * IMPORTANT: JDY-31 only accepts AT commands when NOT connected.
+ *
+ * This project keeps AT-control disabled by default (JDY31_ENABLE_AT_CONTROL=0)
+ * because different JDY firmwares use different commands, and sending the wrong
+ * sequence (or resetting) can break the link/baud and stop the app from
+ * receiving data.
+ */
+#define JDY31_AT_CMD_DELAY_MS  80u
+
 /* ========================================================================== *
  *  Init
  * ========================================================================== */
@@ -171,4 +181,46 @@ void JDY31_FlushBuffers(void)
     s_rx_head = 0;
     s_rx_tail = 0;
     memset(s_rx_buf, 0, sizeof(s_rx_buf));
+}
+
+JDY31_Status_t JDY31_SetEnabled(bool enabled)
+{
+    /* Never try to send AT commands while connected — would go to the host app. */
+    if (JDY31_IsConnected()) {
+        /* Still update local heuristics so the rest of firmware treats it as off. */
+        if (!enabled) {
+            s_connected = false;
+            s_last_rx_tick = 0u;
+            JDY31_FlushBuffers();
+        }
+        return JDY31_OK;
+    }
+
+    /* Always keep internal state consistent. */
+    if (!enabled) {
+        s_connected = false;
+        s_last_rx_tick = 0u;
+        JDY31_FlushBuffers();
+    }
+
+#if JDY31_ENABLE_AT_CONTROL
+    /* Best-effort AT-control.
+     * NOTE: only runs when not connected.
+     * Update these commands after confirming your JDY-31 AT manual.
+     */
+    if (enabled) {
+        HAL_UART_Receive_IT(&BLE_UART_HANDLE, &s_rx_byte, 1);
+        (void)JDY31_SendStr("AT+SLEEP0\r\n");
+        osDelay(JDY31_AT_CMD_DELAY_MS);
+        (void)JDY31_SendStr("AT+ADVEN1\r\n");
+        osDelay(JDY31_AT_CMD_DELAY_MS);
+    } else {
+        (void)JDY31_SendStr("AT+ADVEN0\r\n");
+        osDelay(JDY31_AT_CMD_DELAY_MS);
+        (void)JDY31_SendStr("AT+SLEEP1\r\n");
+        osDelay(JDY31_AT_CMD_DELAY_MS);
+    }
+#endif
+
+    return JDY31_OK;
 }
